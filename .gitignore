@@ -1,0 +1,7 @@
+*.pyc
+
+.vscode
+
+*.so
+
+log/*

@@ -1,0 +1,37 @@
+
+dataset_name = miv
+datadir = /work/Users/lisicheng/Dataset/INVR/Mirror
+expname = miv_mirror_384_codec
+basedir = ./log
+
+downsample_train = 1.0
+ndc_ray = 1
+
+n_iters = 100000
+batch_size = 4096
+
+N_voxel_init = 2097156 # 128**3
+N_voxel_final = 262144000 # 640**3
+upsamp_list = [2000,3000,4000,5500]
+update_AlphaMask_list = [2500]
+
+step_ratio = 2.0
+
+N_vis = -1 # vis all testing images
+vis_every = 5000
+
+render_test = 1
+render_path = 1
+
+n_lamb_sigma = [32,32,32]
+n_lamb_sh = [96,96,96]
+
+shadingMode = MLP_Fea
+fea2denseAct = relu
+
+view_pe = 0
+fea_pe = 0
+
+TV_weight_density = 1.0
+TV_weight_app = 1.0
+
