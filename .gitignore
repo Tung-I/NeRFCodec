@@ -5,3 +5,4 @@
 *.so
 
 log/*
+!log/.gitkeep
