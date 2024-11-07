@@ -39,7 +39,7 @@ We reuse the training script ["auto_run_paramsets.py"](extra/auto_run_paramsets.
 To be released...
 
 ## Contact
-If you have any issue regrading this repository, e.g. environment setup, training scripts, more technical details, please e-mail [Sicheng Li](jasonlisicheng@zju.edu.cn). 
+If you have any issue regrading this repository, e.g. environment setup, training scripts, more technical details, please e-mail Sicheng Li at jasonlisicheng@zju.edu.cn. 
 
 ## Citation
 If you find our code or paper useful, please cite
