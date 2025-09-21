@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,7 @@
 # WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-import pdb
+
 from typing import Any, Dict, Mapping, cast
 
 import torch.nn as nn
@@ -62,7 +62,6 @@ def net_aux_optimizer(
     union_params = parameters["net"] | parameters["aux"]
     assert len(inter_params) == 0
     assert len(union_params) - len(params_dict.keys()) == 0
-    # pdb.set_trace()
 
     def make_optimizer(key):
         kwargs = dict(conf[key])

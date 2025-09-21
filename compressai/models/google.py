@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,7 @@
 # WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-import pdb
+
 import warnings
 
 import torch
@@ -294,7 +294,6 @@ class ScaleHyperprior(CompressionModel):
         z = self.h_a(torch.abs(y))
         z_hat, z_likelihoods = self.entropy_bottleneck(z)
         scales_hat = self.h_s(z_hat)
-        # pdb.set_trace()
         y_hat, y_likelihoods = self.gaussian_conditional(y, scales_hat)
         x_hat = self.g_s(y_hat)
 
@@ -688,7 +687,7 @@ class JointAutoregressiveHierarchicalPriors(MeanScaleHyperprior):
             )
 
         y_hat = F.pad(y_hat, (-padding, -padding, -padding, -padding))
-        x_hat = self.g_s(y_hat)
+        x_hat = self.g_s(y_hat).clamp_(0, 1)
         return {"x_hat": x_hat}
 
     def _decompress_ar(

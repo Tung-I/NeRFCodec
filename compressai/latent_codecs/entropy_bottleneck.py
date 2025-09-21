@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -80,7 +80,7 @@ class EntropyBottleneckLatentCodec(LatentCodec):
         return {"strings": [y_strings], "shape": shape, "y_hat": y_hat}
 
     def decompress(
-        self, strings: List[List[bytes]], shape: Tuple[int, int]
+        self, strings: List[List[bytes]], shape: Tuple[int, int], **kwargs
     ) -> Dict[str, Any]:
         (y_strings,) = strings
         y_hat = self.entropy_bottleneck.decompress(y_strings, shape)

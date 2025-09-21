@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -33,6 +33,7 @@ Update the CDFs parameters of a trained model.
 To be called on a model checkpoint after training. This will update the internal
 CDFs related buffers required for entropy coding.
 """
+
 import argparse
 import hashlib
 import sys
@@ -50,7 +51,8 @@ from compressai.models.google import (
 )
 from compressai.models.video.google import ScaleSpaceFlow
 from compressai.zoo import load_state_dict
-from compressai.zoo.image import model_architectures as zoo_models
+from compressai.zoo.image import model_architectures as image_architectures
+from compressai.zoo.image_vbr import model_architectures as image_architectures_vbr
 
 
 def sha256_file(filepath: Path, len_hash_prefix: int = 8) -> str:
@@ -67,7 +69,7 @@ def sha256_file(filepath: Path, len_hash_prefix: int = 8) -> str:
     return digest[:len_hash_prefix]
 
 
-def load_checkpoint(filepath: Path) -> Dict[str, torch.Tensor]:
+def load_checkpoint(filepath: Path, arch: str) -> Dict[str, torch.Tensor]:
     checkpoint = torch.load(filepath, map_location="cpu")
 
     if "network" in checkpoint:
@@ -76,7 +78,9 @@ def load_checkpoint(filepath: Path) -> Dict[str, torch.Tensor]:
         state_dict = checkpoint["state_dict"]
     else:
         state_dict = checkpoint
-
+    # if arch in ["bmshj2018-hyperprior-vbr", "mbt2018-mean-vbr"]:
+    #     state_dict = load_state_dict(state_dict, vr_entbttlnck=True)
+    # else:
     state_dict = load_state_dict(state_dict)
     return state_dict
 
@@ -93,7 +97,8 @@ models = {
     "scale-hyperprior": ScaleHyperprior,
     "ssf2020": ScaleSpaceFlow,
 }
-models.update(zoo_models)
+models.update(image_architectures)
+models.update(image_architectures_vbr)
 
 
 def setup_args():
@@ -126,14 +131,17 @@ def main(argv):
     if not filepath.is_file():
         raise RuntimeError(f'"{filepath}" is not a valid file.')
 
-    state_dict = load_checkpoint(filepath)
+    state_dict = load_checkpoint(filepath, args.architecture)
 
     model_cls_or_entrypoint = models[args.architecture]
     if not isinstance(model_cls_or_entrypoint, type):
         model_cls = model_cls_or_entrypoint()
     else:
         model_cls = model_cls_or_entrypoint
-    net = model_cls.from_state_dict(state_dict)
+    if args.architecture in ["bmshj2018-hyperprior-vbr", "mbt2018-mean-vbr"]:
+        net = model_cls.from_state_dict(state_dict, vr_entbttlnck=True)
+    else:
+        net = model_cls.from_state_dict(state_dict)
 
     if not args.no_update:
         net.update(force=True)

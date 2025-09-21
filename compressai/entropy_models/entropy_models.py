@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -26,7 +26,7 @@
 # WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-import pdb
+
 import warnings
 
 from typing import Any, Callable, List, Optional, Tuple, Union
@@ -168,10 +168,7 @@ class EntropyModel(nn.Module):
         if means is not None:
             outputs -= means
 
-        # try to change to STE
-        # outputs = torch.round(outputs)
-        outputs = (torch.round(outputs) - outputs).detach() + outputs
-        # pdb.set_trace()
+        outputs = torch.round(outputs)
 
         if mode == "dequantize":
             if means is not None:
@@ -235,13 +232,18 @@ class EntropyModel(nn.Module):
         if len(self._cdf_length.size()) != 1:
             raise ValueError(f"Invalid offsets size {self._cdf_length.size()}")
 
-    def compress(self, inputs, indexes, means=None):
+    def compress(
+        self,
+        inputs: torch.Tensor,
+        indexes: torch.Tensor,
+        means: Optional[torch.Tensor] = None,
+    ):
         """
         Compress input tensors to char strings.
 
         Args:
             inputs (torch.Tensor): input tensors
-            indexes (torch.IntTensor): tensors CDF indexes
+            indexes (torch.Tensor): tensors CDF indexes
             means (torch.Tensor, optional): optional tensor means
         """
         symbols = self.quantize(inputs, "symbols", means)
@@ -272,17 +274,17 @@ class EntropyModel(nn.Module):
 
     def decompress(
         self,
-        strings: str,
-        indexes: torch.IntTensor,
+        strings: List[bytes],
+        indexes: torch.Tensor,
         dtype: torch.dtype = torch.float,
-        means: torch.Tensor = None,
+        means: Optional[torch.Tensor] = None,
     ):
         """
         Decompress char strings to tensors.
 
         Args:
-            strings (str): compressed tensors
-            indexes (torch.IntTensor): tensors CDF indexes
+            strings (list[bytes]): compressed tensors
+            indexes (torch.Tensor): tensors CDF indexes
             dtype (torch.dtype): type of dequantized output
             means (torch.Tensor, optional): optional tensor means
         """
@@ -363,25 +365,28 @@ class EntropyBottleneck(EntropyModel):
         scale = self.init_scale ** (1 / (len(self.filters) + 1))
         channels = self.channels
 
+        self.matrices = nn.ParameterList()
+        self.biases = nn.ParameterList()
+        self.factors = nn.ParameterList()
+
         for i in range(len(self.filters) + 1):
             init = np.log(np.expm1(1 / scale / filters[i + 1]))
             matrix = torch.Tensor(channels, filters[i + 1], filters[i])
             matrix.data.fill_(init)
-            self.register_parameter(f"_matrix{i:d}", nn.Parameter(matrix))
+            self.matrices.append(nn.Parameter(matrix))
 
             bias = torch.Tensor(channels, filters[i + 1], 1)
             nn.init.uniform_(bias, -0.5, 0.5)
-            self.register_parameter(f"_bias{i:d}", nn.Parameter(bias))
+            self.biases.append(nn.Parameter(bias))
 
             if i < len(self.filters):
                 factor = torch.Tensor(channels, filters[i + 1], 1)
                 nn.init.zeros_(factor)
-                self.register_parameter(f"_factor{i:d}", nn.Parameter(factor))
+                self.factors.append(nn.Parameter(factor))
 
         self.quantiles = nn.Parameter(torch.Tensor(channels, 1, 3))
         init = torch.Tensor([-self.init_scale, 0, self.init_scale])
         self.quantiles.data = init.repeat(self.quantiles.size(0), 1, 1)
-        # pdb.set_trace()
 
         target = np.log(2 / self.tail_mass - 1)
         self.register_buffer("target", torch.Tensor([-target, 0, target]))
@@ -390,12 +395,14 @@ class EntropyBottleneck(EntropyModel):
         medians = self.quantiles[:, :, 1:2]
         return medians
 
-    def update(self, force: bool = False) -> bool:
+    def update(self, force: bool = False, update_quantiles: bool = False) -> bool:
         # Check if we need to update the bottleneck parameters, the offsets are
         # only computed and stored when the conditonal model is update()'d.
-        # pdb.set_trace()
         if self._offset.numel() > 0 and not force:
             return False
+
+        if update_quantiles:
+            self._update_quantiles()
 
         medians = self.quantiles[:, 0, 1]
 
@@ -428,7 +435,6 @@ class EntropyBottleneck(EntropyModel):
 
     def loss(self) -> Tensor:
         logits = self._logits_cumulative(self.quantiles, stop_gradient=True)
-        # pdb.set_trace()
         loss = torch.abs(logits - self.target).sum()
         return loss
 
@@ -436,24 +442,23 @@ class EntropyBottleneck(EntropyModel):
         # TorchScript not yet working (nn.Mmodule indexing not supported)
         logits = inputs
         for i in range(len(self.filters) + 1):
-            matrix = getattr(self, f"_matrix{i:d}")
+            matrix = self.matrices[i]
             if stop_gradient:
                 matrix = matrix.detach()
             logits = torch.matmul(F.softplus(matrix), logits)
 
-            bias = getattr(self, f"_bias{i:d}")
+            bias = self.biases[i]
             if stop_gradient:
                 bias = bias.detach()
-            logits += bias
+            logits = logits + bias
 
             if i < len(self.filters):
-                factor = getattr(self, f"_factor{i:d}")
+                factor = self.factors[i]
                 if stop_gradient:
                     factor = factor.detach()
-                logits += torch.tanh(factor) * torch.tanh(logits)
+                logits = logits + torch.tanh(factor) * torch.tanh(logits)
         return logits
 
-    @torch.jit.unused
     def _likelihood(
         self, inputs: Tensor, stop_gradient: bool = False
     ) -> Tuple[Tensor, Tensor, Tensor]:
@@ -466,23 +471,25 @@ class EntropyBottleneck(EntropyModel):
     def forward(
         self, x: Tensor, training: Optional[bool] = None
     ) -> Tuple[Tensor, Tensor]:
-        # pdb.set_trace()
         if training is None:
             training = self.training
 
         if not torch.jit.is_scripting():
             # x from B x C x ... to C x B x ...
-            perm = np.arange(len(x.shape))
-            perm[0], perm[1] = perm[1], perm[0]
-            # Compute inverse permutation
-            inv_perm = np.arange(len(x.shape))[np.argsort(perm)]
+            perm = torch.cat(
+                (
+                    torch.tensor([1, 0], dtype=torch.long, device=x.device),
+                    torch.arange(2, x.ndim, dtype=torch.long, device=x.device),
+                )
+            )
+            inv_perm = perm
         else:
             raise NotImplementedError()
             # TorchScript in 2D for static inference
             # Convert to (channels, ... , batch) format
             # perm = (1, 2, 3, 0)
             # inv_perm = (3, 0, 1, 2)
-        # pdb.set_trace()
+
         x = x.permute(*perm).contiguous()
         shape = x.size()
         values = x.reshape(x.size(0), 1, -1)
@@ -527,6 +534,39 @@ class EntropyBottleneck(EntropyModel):
     @staticmethod
     def _extend_ndims(tensor, n):
         return tensor.reshape(-1, *([1] * n)) if n > 0 else tensor.reshape(-1)
+
+    @torch.no_grad()
+    def _update_quantiles(self, search_radius=1e5, rtol=1e-4, atol=1e-3):
+        """Fast quantile update via bisection search.
+
+        Often faster and much more precise than minimizing aux loss.
+        """
+        device = self.quantiles.device
+        shape = (self.channels, 1, 1)
+        low = torch.full(shape, -search_radius, device=device)
+        high = torch.full(shape, search_radius, device=device)
+
+        def f(y, self=self):
+            return self._logits_cumulative(y, stop_gradient=True)
+
+        for i in range(len(self.target)):
+            q_i = self._search_target(f, self.target[i], low, high, rtol, atol)
+            self.quantiles[:, :, i] = q_i[:, :, 0]
+
+    @staticmethod
+    def _search_target(f, target, low, high, rtol=1e-4, atol=1e-3, strict=False):
+        assert (low <= high).all()
+        if strict:
+            assert ((f(low) <= target) & (target <= f(high))).all()
+        else:
+            low = torch.where(target <= f(high), low, high)
+            high = torch.where(f(low) <= target, high, low)
+        while not torch.isclose(low, high, rtol=rtol, atol=atol).all():
+            mid = (low + high) / 2
+            f_mid = f(mid)
+            low = torch.where(f_mid <= target, mid, low)
+            high = torch.where(f_mid >= target, mid, high)
+        return (low + high) / 2
 
     def compress(self, x):
         indexes = self._build_indexes(x.size())
@@ -671,7 +711,6 @@ class GaussianConditional(EntropyModel):
     ) -> Tuple[Tensor, Tensor]:
         if training is None:
             training = self.training
-
         outputs = self.quantize(inputs, "noise" if training else "dequantize", means)
         likelihood = self._likelihood(outputs, scales, means)
         if self.use_likelihood_bound:
@@ -684,3 +723,224 @@ class GaussianConditional(EntropyModel):
         for s in self.scale_table[:-1]:
             indexes -= (scales <= s).int()
         return indexes
+
+
+class GaussianMixtureConditional(GaussianConditional):
+    def __init__(
+        self,
+        K=3,
+        scale_table: Optional[Union[List, Tuple]] = None,
+        *args: Any,
+        **kwargs: Any,
+    ):
+        super().__init__(scale_table, *args, **kwargs)
+
+        self.K = K
+
+    def _likelihood(
+        self, inputs: Tensor, scales: Tensor, means: Tensor, weights: Tensor
+    ) -> Tensor:
+        likelihood = torch.zeros_like(inputs)
+        M = inputs.size(1)
+
+        for k in range(self.K):
+            likelihood += (
+                super()._likelihood(
+                    inputs,
+                    scales[:, M * k : M * (k + 1)],
+                    means[:, M * k : M * (k + 1)],
+                )
+                * weights[:, M * k : M * (k + 1)]
+            )
+
+        return likelihood
+
+    def forward(
+        self,
+        inputs: Tensor,
+        scales: Tensor,
+        means: Tensor,
+        weights: Tensor,
+        training: Optional[bool] = None,
+    ) -> Tuple[Tensor, Tensor]:
+        if training is None:
+            training = self.training
+        outputs = self.quantize(
+            inputs, "noise" if training else "dequantize", means=None
+        )
+        likelihood = self._likelihood(outputs, scales, means, weights)
+        if self.use_likelihood_bound:
+            likelihood = self.likelihood_lower_bound(likelihood)
+        return outputs, likelihood
+
+    @torch.no_grad()
+    def _build_cdf(self, scales, means, weights, abs_max):
+        num_latents = scales.size(1)
+        num_samples = abs_max * 2 + 1
+        TINY = 1e-10
+        device = scales.device
+
+        scales = scales.clamp_(0.11, 256)
+        means += abs_max
+
+        scales_ = scales.unsqueeze(-1).expand(-1, -1, num_samples)
+        means_ = means.unsqueeze(-1).expand(-1, -1, num_samples)
+        weights_ = weights.unsqueeze(-1).expand(-1, -1, num_samples)
+
+        samples = (
+            torch.arange(num_samples).to(device).unsqueeze(0).expand(num_latents, -1)
+        )
+
+        pmf = torch.zeros_like(samples).float()
+        for k in range(self.K):
+            pmf += (
+                0.5
+                * (
+                    1
+                    + torch.erf(
+                        (samples + 0.5 - means_[k]) / ((scales_[k] + TINY) * 2**0.5)
+                    )
+                )
+                - 0.5
+                * (
+                    1
+                    + torch.erf(
+                        (samples - 0.5 - means_[k]) / ((scales_[k] + TINY) * 2**0.5)
+                    )
+                )
+            ) * weights_[k]
+
+        cdf_limit = 2**self.entropy_coder_precision - 1
+        pmf = torch.clamp(pmf, min=1.0 / cdf_limit, max=1.0)
+        pmf_scaled = torch.round(pmf * cdf_limit)
+        pmf_sum = torch.sum(pmf_scaled, 1, keepdim=True).expand(-1, num_samples)
+
+        cdf = F.pad(
+            torch.cumsum(pmf_scaled * cdf_limit / pmf_sum, 1).int(),
+            (1, 0),
+            "constant",
+            0,
+        )
+        pmf_quantized = torch.diff(cdf, dim=1)
+
+        # We can't have zeros in PMF because rANS won't be able to encode it.
+        # Try to fix this by "stealing" probability from some unlikely symbols.
+
+        pmf_zero_count = num_samples - torch.count_nonzero(pmf_quantized, dim=1)
+
+        _, pmf_first_stealable_indices = torch.min(
+            torch.where(
+                pmf_quantized > pmf_zero_count.unsqueeze(-1).expand(-1, num_samples),
+                pmf_quantized,
+                torch.tensor(cdf_limit + 1).int(),
+            ),
+            dim=1,
+        )
+
+        pmf_real_zero_indices = (pmf_quantized == 0).nonzero().transpose(0, 1)
+        pmf_quantized[pmf_real_zero_indices[0], pmf_real_zero_indices[1]] += 1
+
+        pmf_real_steal_indices = torch.cat(
+            (
+                torch.arange(num_latents).to(device).unsqueeze(-1),
+                pmf_first_stealable_indices.unsqueeze(-1),
+            ),
+            dim=1,
+        ).transpose(0, 1)
+        pmf_quantized[pmf_real_steal_indices[0], pmf_real_steal_indices[1]] -= (
+            pmf_zero_count
+        )
+
+        cdf = F.pad(torch.cumsum(pmf_quantized, 1).int(), (1, 0), "constant", 0)
+        cdf = F.pad(cdf, (0, 1), "constant", cdf_limit + 1)
+
+        return cdf
+
+    def reshape_entropy_parameters(self, scales, means, weights, nonzero):
+        reshape_size = (scales.size(0), self.K, scales.size(1) // self.K, -1)
+
+        scales = (
+            scales.reshape(*reshape_size)[:, :, nonzero]
+            .permute(1, 0, 2, 3)
+            .reshape(self.K, -1)
+        )
+        means = (
+            means.reshape(*reshape_size)[:, :, nonzero]
+            .permute(1, 0, 2, 3)
+            .reshape(self.K, -1)
+        )
+        weights = (
+            weights.reshape(*reshape_size)[:, :, nonzero]
+            .permute(1, 0, 2, 3)
+            .reshape(self.K, -1)
+        )
+        return scales, means, weights
+
+    def compress(self, y, scales, means, weights):
+        abs_max = (
+            max(torch.abs(y.max()).int().item(), torch.abs(y.min()).int().item()) + 1
+        )
+        abs_max = 1 if abs_max < 1 else abs_max
+
+        y_quantized = torch.round(y)
+        zero_bitmap = torch.where(
+            torch.sum(torch.abs(y_quantized), (3, 2)).squeeze(0) == 0, 0, 1
+        )
+
+        nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
+        symbols = y_quantized[:, nonzero] + abs_max
+        cdf = self._build_cdf(
+            *self.reshape_entropy_parameters(scales, means, weights, nonzero), abs_max
+        )
+
+        num_latents = cdf.size(0)
+
+        # rv = self.entropy_coder._encoder.encode_with_indexes(
+        #     symbols.reshape(-1).int().tolist(),
+        #     torch.arange(num_latents).int().tolist(),
+        #     cdf.cpu().to(torch.int32),
+        #     torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
+        #     torch.tensor(0).repeat(num_latents).int().tolist(),
+        # )
+        rv = self.entropy_coder._encoder.encode_with_indexes(
+            symbols.reshape(-1).int().tolist(),
+            torch.arange(num_latents).int().tolist(),
+            cdf.cpu().tolist(),
+            torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
+            torch.tensor(0).repeat(num_latents).int().tolist(),
+        )
+
+        return (rv, abs_max, zero_bitmap), y_quantized
+
+    def decompress(self, strings, abs_max, zero_bitmap, scales, means, weights):
+        nonzero = torch.nonzero(zero_bitmap).flatten().tolist()
+        cdf = self._build_cdf(
+            *self.reshape_entropy_parameters(scales, means, weights, nonzero), abs_max
+        )
+
+        num_latents = cdf.size(0)
+
+        # values = self.entropy_coder._decoder.decode_with_indexes(
+        #     strings,
+        #     torch.arange(num_latents).int().tolist(),
+        #     cdf.cpu().to(torch.int32),
+        #     torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
+        #     torch.tensor(0).repeat(num_latents).int().tolist(),
+        # )
+        values = self.entropy_coder._decoder.decode_with_indexes(
+            strings,
+            torch.arange(num_latents).int().tolist(),
+            cdf.cpu().tolist(),
+            torch.tensor(cdf.size(1)).repeat(num_latents).int().tolist(),
+            torch.tensor(0).repeat(num_latents).int().tolist(),
+        )
+
+        symbols = torch.tensor(values) - abs_max
+        symbols = symbols.reshape(scales.size(0), -1, scales.size(2), scales.size(3))
+
+        y_hat = torch.zeros(
+            scales.size(0), zero_bitmap.size(0), scales.size(2), scales.size(3)
+        )
+        y_hat[:, nonzero] = symbols.float()
+
+        return y_hat

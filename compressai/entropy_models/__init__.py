@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -27,10 +27,19 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from .entropy_models import EntropyBottleneck, EntropyModel, GaussianConditional
+from .entropy_models import (
+    EntropyBottleneck,
+    EntropyModel,
+    GaussianConditional,
+    GaussianMixtureConditional,
+)
+from .entropy_models_vbr import EntropyBottleneckVbr, EntropyModelVbr
 
 __all__ = [
     "EntropyModel",
     "EntropyBottleneck",
     "GaussianConditional",
+    "GaussianMixtureConditional",
+    "EntropyModelVbr",
+    "EntropyBottleneckVbr",
 ]

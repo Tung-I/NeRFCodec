@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -43,8 +43,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from pytorch_msssim import ms_ssim
-from torch import Tensor
-from torch.cuda import amp
+from torch import Tensor, amp
 from torch.utils.model_zoo import tqdm
 
 import compressai
@@ -107,7 +106,8 @@ def convert_yuv420_to_rgb(
     # yuv420 [0, 2**bitdepth-1] to rgb 444 [0, 1] only for now
     out = to_tensors(frame, device=str(device), max_value=max_val)
     out = yuv_420_to_444(
-        tuple(c.unsqueeze(0).unsqueeze(0) for c in out), mode="bicubic"  # type: ignore
+        tuple(c.unsqueeze(0).unsqueeze(0) for c in out),  # type: ignore
+        mode="bicubic",
     )
     return ycbcr2rgb(out)  # type: ignore
 
@@ -370,7 +370,9 @@ def run_inference(
         if sequence_metrics_path.is_file():
             continue
 
-        with amp.autocast(enabled=args["half"]):
+        with amp.autocast(
+            device_type=next(net.parameters()).device.type, enabled=args["half"]
+        ):
             with torch.no_grad():
                 if entropy_estimation:
                     metrics = eval_model_entropy_estimation(net, filepath)
@@ -466,6 +468,13 @@ def create_parser() -> argparse.ArgumentParser:
         help="metric trained against (default: %(default)s)",
     )
     parent_parser.add_argument(
+        "-d",
+        "--output_directory",
+        type=str,
+        default="",
+        help="path of output directory. Optional, required for output json file, results per video.",
+    )
+    parent_parser.add_argument(
         "-o",
         "--output-file",
         type=str,
@@ -504,7 +513,7 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(args: Any = None) -> None:
+def main(args: Any = None) -> None:  # noqa: C901
     if args is None:
         args = sys.argv[1:]
     parser = create_parser()
@@ -523,8 +532,8 @@ def main(args: Any = None) -> None:
         raise SystemExit(1)
 
     # create output directory
-    outputdir = args.output
-    Path(outputdir).mkdir(parents=True, exist_ok=True)
+    if args.output_directory:
+        Path(args.output_directory).mkdir(parents=True, exist_ok=True)
 
     if args.source == "pretrained":
         args.qualities = [int(q) for q in args.qualities.split(",") if q]
@@ -559,7 +568,7 @@ def main(args: Any = None) -> None:
             filepaths,
             args.dataset,
             model,
-            outputdir,
+            args.output_directory,
             trained_net=trained_net,
             description=description,
             **args_dict,
@@ -579,7 +588,9 @@ def main(args: Any = None) -> None:
     else:
         output_file = args.output_file
 
-    with (Path(f"{outputdir}/{output_file}").with_suffix(".json")).open("wb") as f:
+    with (Path(f"{args.output_directory}/{output_file}").with_suffix(".json")).open(
+        "wb"
+    ) as f:
         f.write(json.dumps(output, indent=2).encode())
     print(json.dumps(output, indent=2))
 

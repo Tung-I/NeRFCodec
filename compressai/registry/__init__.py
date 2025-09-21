@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -41,7 +41,7 @@ from .torch import (
     register_optimizer,
     register_scheduler,
 )
-from .torchvision import TRANSFORMS
+from .transforms import TRANSFORMS, register_transform
 
 __all__ = [
     "CRITERIONS",
@@ -57,4 +57,5 @@ __all__ = [
     "register_module",
     "register_optimizer",
     "register_scheduler",
+    "register_transform",
 ]

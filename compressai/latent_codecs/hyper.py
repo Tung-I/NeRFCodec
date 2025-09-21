@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -27,13 +27,14 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import torch.nn as nn
 
 from torch import Tensor
 
 from compressai.entropy_models import EntropyBottleneck
+from compressai.ops import quantize_ste
 from compressai.registry import register_module
 
 from .base import LatentCodec
@@ -64,26 +65,26 @@ class HyperLatentCodec(LatentCodec):
 
     """
 
-    entropy_bottleneck: EntropyBottleneck
-    h_a: nn.Module
-    h_s: nn.Module
-
     def __init__(
         self,
-        entropy_bottleneck: Optional[EntropyBottleneck] = None,
-        h_a: Optional[nn.Module] = None,
-        h_s: Optional[nn.Module] = None,
+        entropy_bottleneck: EntropyBottleneck,
+        h_a: nn.Module,
+        h_s: nn.Module,
+        quantizer: str = "noise",
         **kwargs,
     ):
         super().__init__()
-        assert entropy_bottleneck is not None
         self.entropy_bottleneck = entropy_bottleneck
-        self.h_a = h_a or nn.Identity()
-        self.h_s = h_s or nn.Identity()
+        self.h_a = h_a
+        self.h_s = h_s
+        self.quantizer = quantizer
 
     def forward(self, y: Tensor) -> Dict[str, Any]:
         z = self.h_a(y)
         z_hat, z_likelihoods = self.entropy_bottleneck(z)
+        if self.quantizer == "ste":
+            z_medians = self.entropy_bottleneck._get_medians()
+            z_hat = quantize_ste(z - z_medians) + z_medians
         params = self.h_s(z_hat)
         return {"likelihoods": {"z": z_likelihoods}, "params": params}
 
@@ -96,7 +97,7 @@ class HyperLatentCodec(LatentCodec):
         return {"strings": [z_strings], "shape": shape, "params": params}
 
     def decompress(
-        self, strings: List[List[bytes]], shape: Tuple[int, int]
+        self, strings: List[List[bytes]], shape: Tuple[int, int], **kwargs
     ) -> Dict[str, Any]:
         (z_strings,) = strings
         z_hat = self.entropy_bottleneck.decompress(z_strings, shape)

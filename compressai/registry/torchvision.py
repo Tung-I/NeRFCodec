@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -27,10 +27,9 @@
 # OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-from typing import Callable, Dict
+from .transforms import TRANSFORMS, register_transform
 
-from torchvision import transforms
-
-TRANSFORMS: Dict[str, Callable[..., Callable]] = {
-    k: v for k, v in transforms.__dict__.items() if k[0].isupper()
-}
+__all__ = [
+    "TRANSFORMS",
+    "register_transform",
+]

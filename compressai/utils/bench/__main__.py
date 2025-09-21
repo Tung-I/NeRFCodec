@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -30,10 +30,10 @@
 Collect performance metrics of published traditional or end-to-end image
 codecs.
 """
+
 import argparse
 import json
 import multiprocessing as mp
-import pdb
 import sys
 
 from collections import defaultdict
@@ -177,5 +177,4 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    # pdb.set_trace()
     main(sys.argv[1:])

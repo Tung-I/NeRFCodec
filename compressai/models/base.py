@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, InterDigital Communications, Inc
+# Copyright (c) 2021-2024, InterDigital Communications, Inc
 # All rights reserved.
 
 # Redistribution and use in source and binary forms, with or without
@@ -28,6 +28,7 @@
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 import math
+import warnings
 
 from typing import cast
 
@@ -38,7 +39,7 @@ from torch import Tensor
 
 from compressai.entropy_models import EntropyBottleneck, GaussianConditional
 from compressai.latent_codecs import LatentCodec
-from compressai.models.utils import update_registered_buffers
+from compressai.models.utils import remap_old_keys, update_registered_buffers
 
 __all__ = [
     "CompressionModel",
@@ -66,6 +67,30 @@ class CompressionModel(nn.Module):
     EntropyBottleneck or GaussianConditional modules.
     """
 
+    def __init__(self, entropy_bottleneck_channels=None, init_weights=None):
+        super().__init__()
+
+        if entropy_bottleneck_channels is not None:
+            warnings.warn(
+                "The entropy_bottleneck_channels parameter is deprecated. "
+                "Create an entropy_bottleneck in your model directly instead:\n\n"
+                "class YourModel(CompressionModel):\n"
+                "    def __init__(self):\n"
+                "        super().__init__()\n"
+                "        self.entropy_bottleneck = "
+                "EntropyBottleneck(entropy_bottleneck_channels)\n",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            self.entropy_bottleneck = EntropyBottleneck(entropy_bottleneck_channels)
+
+        if init_weights is not None:
+            warnings.warn(
+                "The init_weights parameter was removed as it was never functional.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
     def load_state_dict(self, state_dict, strict=True):
         for name, module in self.named_modules():
             if not any(x.startswith(name) for x in state_dict.keys()):
@@ -78,6 +103,7 @@ class CompressionModel(nn.Module):
                     ["_quantized_cdf", "_offset", "_cdf_length"],
                     state_dict,
                 )
+                state_dict = remap_old_keys(name, state_dict)
 
             if isinstance(module, GaussianConditional):
                 update_registered_buffers(
@@ -89,7 +115,7 @@ class CompressionModel(nn.Module):
 
         return nn.Module.load_state_dict(self, state_dict, strict=strict)
 
-    def update(self, scale_table=None, force=False):
+    def update(self, scale_table=None, force=False, update_quantiles: bool = False):
         """Updates EntropyBottleneck and GaussianConditional CDFs.
 
         Needs to be called once after training to be able to later perform the
@@ -100,6 +126,7 @@ class CompressionModel(nn.Module):
                 for initializing the Gaussian distributions
                 (default: 64 logarithmically spaced scales from 0.11 to 256)
             force (bool): overwrite previous values (default: False)
+            update_quantiles (bool): fast update quantiles (default: False)
 
         Returns:
             updated (bool): True if at least one of the modules was updated.
@@ -109,7 +136,7 @@ class CompressionModel(nn.Module):
         updated = False
         for _, module in self.named_modules():
             if isinstance(module, EntropyBottleneck):
-                updated |= module.update(force=force)
+                updated |= module.update(force=force, update_quantiles=update_quantiles)
             if isinstance(module, GaussianConditional):
                 updated |= module.update_scale_table(scale_table, force=force)
         return updated
@@ -160,6 +187,9 @@ class SimpleVAECompressionModel(CompressionModel):
     g_s: nn.Module
     latent_codec: LatentCodec
 
+    def __getitem__(self, key: str) -> LatentCodec:
+        return self.latent_codec[key]
+
     def forward(self, x):
         y = self.g_a(x)
         y_out = self.latent_codec(y)
@@ -175,8 +205,8 @@ class SimpleVAECompressionModel(CompressionModel):
         outputs = self.latent_codec.compress(y)
         return outputs
 
-    def decompress(self, strings, shape):
-        y_out = self.latent_codec.decompress(strings, shape)
+    def decompress(self, *args, **kwargs):
+        y_out = self.latent_codec.decompress(*args, **kwargs)
         y_hat = y_out["y_hat"]
         x_hat = self.g_s(y_hat).clamp_(0, 1)
         return {

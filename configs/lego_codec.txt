@@ -1,6 +1,6 @@
 
 dataset_name = blender
-datadir = ../../Dataset/Synthetic-NeRF(nerf)/lego
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego
 expname =  tensorf_lego_VM_codec
 basedir = ./log
 
