@@ -15,7 +15,7 @@ update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
 #update_AlphaMask_list = [30001]
 
 N_vis = 5
-vis_every = 2500
+vis_every = 5000
 
 render_test = 1
 

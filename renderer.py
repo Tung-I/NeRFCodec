@@ -3,8 +3,9 @@ import pdb
 import torch,os,imageio,sys,copy
 from tqdm.auto import tqdm
 from dataLoader.ray_utils import get_rays
-from models.tensoRF import TensorVM, TensorCP, raw2alpha, TensorVMSplit, AlphaGridMask
-from models.triplane import TriPlane
+# from models.tensoRF import TensorVM, TensorCP, raw2alpha, TensorVMSplit, AlphaGridMask
+# from models.triplane import TriPlane
+from models.tensoRF import TensorVMSplit
 from utils import *
 from dataLoader.ray_utils import ndc_rays_blender
 
@@ -117,7 +118,9 @@ def evaluation(test_dataset,tensorf, args, renderer, savePath=None, N_vis=5, prt
         rgb_map = rgb_map.clamp(0.0, 1.0)
 
         rgb_map, depth_map = rgb_map.reshape(H, W, 3).cpu(), depth_map.reshape(H, W).cpu()
-
+        # print('depth_map', depth_map.shape, depth_map.min(), depth_map.max())
+        # print('rgb_map', rgb_map.shape, rgb_map.min(), rgb_map.max())
+        # raise Exception('stop here')
         # depth_map, _ = visualize_depth_numpy(depth_map.numpy(),near_far) # default
         depth_map, _ = visualize_depth_numpy(depth_map.numpy(), None) # changed @ 2024.4.10
         if len(test_dataset.all_rgbs):

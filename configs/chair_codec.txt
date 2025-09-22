@@ -1,10 +1,10 @@
 
 dataset_name = blender
-datadir = ../../Dataset/Synthetic_NeRF_nerf/chair
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair
 expname =  tensorf_chair_VM_codec
 basedir = ./log
 
-n_iters = 100000
+n_iters = 30000
 batch_size = 4096
 
 N_voxel_init = 2097156 # 128**3

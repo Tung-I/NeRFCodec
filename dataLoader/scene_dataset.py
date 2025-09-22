@@ -18,7 +18,8 @@ from torchvision import transforms as T
 # pdb.set_trace()
 sys.path.append('/work/Users/lisicheng/Code/TensoRF/')
 from dataLoader.ray_utils import *
-from models.tensoRF import TensorVM, TensorCP, raw2alpha, TensorVMSplit, AlphaGridMask
+# from models.tensoRF import TensorVM, TensorCP, raw2alpha, TensorVMSplit, AlphaGridMask
+from models.tensoRF import TensorVMSplit
 from compressai.ops import compute_padding
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

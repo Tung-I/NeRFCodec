@@ -296,6 +296,24 @@ class ChannelChangedScaleHyperprior(ScaleHyperprior):
         )
 
 class AdaptorCheng2020Anchor(Cheng2020Anchor):
+    """
+    Based on Cheng2020Anchor, add adaptor layers to change input/output channel number
+    In Cheng2020Anchor:
+        self.g_a, 
+        self.h_a, 
+        self.h_s, 
+        self.g_s
+    Added by NeRFCodec:
+        self.encoder_adaptor
+        self.decoder_adaptor
+        self.trunc_g_a
+        self.trunc_g_s
+    What the receiver actually needs:
+        decoder_adaptor
+        context_prediction
+        entropy_parameters
+        entropy_bottleneck
+    """
     def __init__(self, plane_ch=16, N=192, q_bit=8, **kwargs):
         super().__init__(N=N, **kwargs)
         # pdb.set_trace()
