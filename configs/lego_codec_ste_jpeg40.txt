@@ -1,10 +1,10 @@
 
 dataset_name = blender
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego
-expname =  tensorf_lego_VM_codec
+expname =  tensorste_lego_jpeg40
 basedir = ./log
 
-n_iters = 80000
+n_iters = 60000
 batch_size = 4096
 
 N_voxel_init = 2097156 # 128**3
@@ -14,30 +14,31 @@ update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
 #upsamp_list = [30001]
 #update_AlphaMask_list = [30001]
 
-N_vis = 5
-vis_every = 5000
-
-render_test = 1
-
-n_lamb_sigma = [32,32,32]
-n_lamb_sh = [96,96,96]
-model_name = TensorVMSplit
-
-
 shadingMode = MLP_Fea
 fea2denseAct = softplus
-
 view_pe = 2
 fea_pe = 2
-
 L1_weight_inital = 8e-5
 L1_weight_rest = 4e-5
 rm_weight_mask_thre = 1e-4
 
-## please uncomment following configuration if hope to training on cp model
-#model_name = TensorCP
-#n_lamb_sigma = [96]
-#n_lamb_sh = [288]
-#N_voxel_final = 125000000 # 500**3
-#L1_weight_inital = 1e-5
-#L1_weight_rest = 1e-5
+N_vis = 5
+vis_every = 10000
+save_every = 10000
+render_test = 1
+
+
+# switch to JPEG backend + TensorSTE
+model_name=TensorSTE
+codec_backend=jpeg
+compression=1
+compress_before_volrend=1
+
+# JPEG config
+jpeg_quality=40
+jpeg_plane_packing_mode=flatten    
+jpeg_quant_mode=global
+jpeg_global_min=-20.0
+jpeg_global_max=20.0
+ste_enabled=1
+

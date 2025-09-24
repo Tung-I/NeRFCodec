@@ -2,6 +2,22 @@ import configargparse
 
 def config_parser(cmd=None):
     parser = configargparse.ArgumentParser()
+    ####
+    group = parser.add_argument_group("jpeg_ste")
+    group.add_argument("--codec_backend", type=str, default="jpeg", choices=["jpeg", "adaptor"])
+    group.add_argument("--jpeg_quality", type=int, default=85)
+    group.add_argument("--jpeg_plane_packing_mode", type=str, default="flatten")    # or "sandwich", etc.
+    group.add_argument("--jpeg_quant_mode", type=str, default="global")          # we use "global"
+    group.add_argument("--jpeg_global_min", type=float, default=-20.0)
+    group.add_argument("--jpeg_global_max", type=float, default=20.0)
+    group.add_argument("--jpeg_align", type=int, default=64)
+    group.add_argument("--ste_enabled", type=int, default=1)  
+    ####
+    parser.add_argument('--resume_system_ckpt', action='store_true', default=False)
+    parser.add_argument('--resume_optim', action='store_true', default=False)
+    parser.add_argument('--extra_iters', type=int, default=0)
+    parser.add_argument('--save_every', type=int, default=5000)
+    ### #
     parser.add_argument('--config', is_config_file=True,
                         help='config file path')
     parser.add_argument("--expname", type=str,
@@ -22,7 +38,7 @@ def config_parser(cmd=None):
     parser.add_argument('--downsample_test', type=float, default=1.0)
 
     parser.add_argument('--model_name', type=str, default='TensorVMSplit',
-                        choices=['TensorVMSplit', 'TensorCP', 'TriPlane'])
+                        choices=['TensorVMSplit', 'TensorCP', 'TriPlane', 'TensorSTE'])
 
     # loader options
     parser.add_argument("--batch_size", type=int, default=4096)
@@ -126,7 +142,7 @@ def config_parser(cmd=None):
                         type=int,
                         default=0)
     # logging/saving options
-    parser.add_argument("--N_vis", type=int, default=20,
+    parser.add_argument("--N_vis", type=int, default=5,
                         help='N images to vis')
     parser.add_argument("--vis_every", type=int, default=1000,
                         help='frequency of visualize the image')

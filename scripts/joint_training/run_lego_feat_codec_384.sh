@@ -18,4 +18,6 @@ python train.py --add_exp_version 1 --expname lego_codec_384 \
                 --compress_before_volrend \
                 --rate_penalty \
                 --lr_decay_target_ratio 1 \
-                --warm_up --warm_up_ckpt log/only_adaptor/version_004
+                --warm_up \
+                --warm_up_ckpt log/lego_codec_384/version_000 \
+                --save_every 5000 --vis_every 5000

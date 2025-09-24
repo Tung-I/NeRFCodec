@@ -152,6 +152,8 @@ def run_eval(args):
             den_rate_list = coding_output["den"]["rec_likelihood"]
             app_rate_list = coding_output["app"]["rec_likelihood"]
             # In eval path we get true coded length (strings_length)
+            # print(den_rate_list)
+            # raise Exception("Debug")
             den_bitstream_bytes = sum([p["strings_length"] for p in den_rate_list])
             app_bitstream_bytes = sum([p["strings_length"] for p in app_rate_list])
         else:
@@ -170,7 +172,7 @@ def run_eval(args):
         renderer,
         args.save_dir if args.save_dir else "./eval_outputs/",
         N_vis=-1,
-        N_samples=-1,
+        N_samples=10,
         white_bg=white_bg,
         ndc_ray=ndc_ray,
         device=device,

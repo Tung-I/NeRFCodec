@@ -17,6 +17,7 @@ from opt import config_parser
 from renderer import *
 from utils import *
 from dataLoader import dataset_dict
+from models.tensorSTE import TensorSTE, JPEGPlanesCfg
 
 
 # ======================================================================================
@@ -203,86 +204,45 @@ def _codec_warmup_if_needed(tensorf, args, writer, logdir):
 
 def _build_model(args, aabb, reso_cur, near_far):
     """
-    Only two modes are supported (the ones you actually run):
-      1) Pretrain from scratch (no --ckpt, no --compression)
-      2) Resume from ckpt and finetune with --compression and --compression_strategy adaptor_feat_coding
+    Two backends:
+      - 'jpeg'    : TensorSTE (STE+JPEG planes)
+      - 'adaptor' : TensorVMSplit + CompressAI adaptors (legacy)
     """
-    Model = eval(args.model_name)  # TensorVMSplit only in your configs
+    using_jpeg = (getattr(args, "codec_backend", "jpeg") == "jpeg")
+    Model = eval(args.model_name) if hasattr(args, "model_name") else (TensorSTE if using_jpeg else TensorVMSplit)
 
-    # --------- FULL RESUME: load previous system ckpt (model+codec) ----------
-    if getattr(args, "resume_system_ckpt", None):
-        # Build a minimal skeleton first (same kwargs as the saved run)
-        system_meta = torch.load(args.resume_system_ckpt, map_location=device, weights_only=False)
-        kwargs = system_meta["kwargs"]; kwargs.update({"device": device})
-
-        # Force flags consistent with the saved run (esp. compression & strategy)
-        kwargs["compression_strategy"] = kwargs.get("compression_strategy", "adaptor_feat_coding")
-        kwargs["compress_before_volrend"] = kwargs.get("compress_before_volrend", True)
-
-        Model = eval(args.model_name)
-        tensorf = Model(**kwargs)
-
-        # Initialize codec *modules* so state_dict keys exist (DO NOT warm or overwrite)
-        tensorf.init_feat_codec(
-            codec_ckpt_path="",              # we will overwrite from system ckpt next
-            loading_pretrain_param=False,    # <--- critical: don't pull zoo weights here
-            adaptor_q_bit=args.adaptor_q_bit,
-            codec_backbone_type=args.codec_backbone_type,
-        )
-
-        # Now load the entire system state (TensoRF + codec + priors)
-        _maybe_align_cdf_and_load_system(tensorf, args.resume_system_ckpt)
-        tensorf.enable_vec_qat()
-
-        return tensorf
-
-
-    # --------- resume path (pretrained TensoRF -> codec finetune) ----------
+    # --------- resume path (pretrained TensoRF -> finetune) ----------
     if args.ckpt is not None:
         ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
-        kwargs = ckpt["kwargs"]
-        kwargs.update({"device": device})
+        kwargs = ckpt["kwargs"]; kwargs.update({"device": device})
 
         # align finetune flags
         if args.compression:
-            kwargs.update({"compression_strategy": args.compression_strategy})
-            kwargs.update({"compress_before_volrend": args.compress_before_volrend})
-            if args.vec_qat:
-                kwargs.update({"vec_qat": True})
-            if args.decode_from_latent_code:
-                kwargs.update({"decode_from_latent_code": True})
+            kwargs.update({"compress_before_volrend": True})
             if kwargs.get("shadingMode", args.shadingMode) != args.shadingMode:
                 kwargs["shadingMode"] = args.shadingMode
 
         tensorf = Model(**kwargs)
         tensorf.load(ckpt)
 
-        # init adaptor feature codec if requested
-        if args.compression:
-            assert args.compression_strategy == "adaptor_feat_coding", \
-                "This simplified train.py only supports adaptor_feat_coding under compression."
-            tensorf.init_feat_codec(
-                args.codec_ckpt,
-                adaptor_q_bit=args.adaptor_q_bit,
-                codec_backbone_type=args.codec_backbone_type,
+        if using_jpeg:
+            # init JPEG config
+            jpeg_cfg = JPEGPlanesCfg(
+                plane_packing_mode=args.jpeg_plane_packing_mode,
+                quant_mode=args.jpeg_quant_mode,
+                global_range=(args.jpeg_global_min, args.jpeg_global_max),
+                align=args.jpeg_align,
+                quality=args.jpeg_quality,
             )
-            if args.joint_train_from_scratch:
-                tensorf.init_svd_volume(res=tensorf.gridSize, device=tensorf.device)
-            if args.resume_finetune and args.system_ckpt:
-                system = torch.load(args.system_ckpt, map_location=device, weights_only=False)
-                # align prior CDF shapes then load system weights
-                app_cdf = system["state_dict"]["app_feat_codec.entropy_bottleneck._quantized_cdf"].size()
-                den_cdf = system["state_dict"]["den_feat_codec.entropy_bottleneck._quantized_cdf"].size()
-                tensorf.app_feat_codec.entropy_bottleneck._quantized_cdf = torch.zeros(app_cdf)
-                tensorf.den_feat_codec.entropy_bottleneck._quantized_cdf = torch.zeros(den_cdf)
-                tensorf.load(system)
-            if args.additional_vec:
-                tensorf.init_additional_volume(device=device)
-            tensorf.enable_vec_qat()
+            tensorf.init_ste(jpeg_cfg)
+            tensorf.set_ste(bool(args.ste_enabled))
+            tensorf.enable_vec_qat()  # optional: QAT for line factors only
+        else:
+            raise Exception("Adaptor codec finetune from TensoRF not supported; please use JPEG+STE backend.")
 
         return tensorf
 
-    # --------- train from scratch (pre-train) ----------
+    # --------- train from scratch ----------
     tensorf = Model(
         aabb, reso_cur, device,
         density_n_comp=args.n_lamb_sigma,
@@ -297,20 +257,48 @@ def _build_model(args, aabb, reso_cur, near_far):
         featureC=args.featureC, step_ratio=args.step_ratio,
         fea2denseAct=args.fea2denseAct,
     )
+
+    if using_jpeg:
+        jpeg_cfg = JPEGPlanesCfg(
+            plane_packing_mode=args.jpeg_plane_packing_mode,
+            quant_mode=args.jpeg_quant_mode,
+            global_range=(args.jpeg_global_min, args.jpeg_global_max),
+            align=args.jpeg_align,
+            quality=args.jpeg_quality,
+        )
+        tensorf.init_ste(jpeg_cfg)
+        tensorf.set_ste(bool(args.ste_enabled))
+        tensorf.enable_vec_qat()
+    else:
+        raise Exception("Adaptor codec training from scratch not supported; please use JPEG+STE backend.")
+
     return tensorf
 
 
+
 def _configure_optimizers(tensorf, args):
-    """
-    Exactly two cases:
-      - no compression: optimize TensoRF only
-      - adaptor_feat_coding: optimize TensoRF + (adaptor + prior), plus aux optimizer
-    """
+    using_jpeg = (getattr(args, "codec_backend", "jpeg") == "jpeg")
+
     if not args.compression:
         grad_vars = tensorf.get_optparam_groups(args.lr_init, args.lr_basis)
         return torch.optim.Adam(grad_vars, betas=(0.9, 0.99)), None
 
-    # finetune with adaptor codec
+    if using_jpeg:
+        # Optimize only TensoRF (and optional extras); no aux optimizer
+        if not args.resume_finetune:
+            grad_vars = tensorf.get_optparam_groups(
+                lr_init_spatialxyz=2e-3, lr_init_network=1e-4, fix_plane=args.fix_triplane
+            )
+        else:
+            grad_vars = tensorf.get_optparam_groups(lr_init_spatialxyz=2e-3, lr_init_network=0)
+
+        if args.additional_vec:
+            grad_vars += tensorf.get_additional_optparam_groups(lr_init_spatialxyz=2e-3)
+
+        main_opt = torch.optim.Adam(grad_vars, betas=(0.9, 0.99))
+        return main_opt, None
+
+    # ---- legacy adaptor backend (unchanged) ----
     if not args.resume_finetune:
         grad_vars = tensorf.get_optparam_groups(
             lr_init_spatialxyz=2e-3, lr_init_network=1e-4, fix_plane=args.fix_triplane
@@ -331,7 +319,7 @@ def _configure_optimizers(tensorf, args):
         grad_vars += tensorf.get_latent_code_groups(lr_latent_code=args.lr_latent_code)
 
     main_opt = torch.optim.Adam(grad_vars, betas=(0.9, 0.99))
-    _, aux_opt = configure_optimizers(tensorf, args)   # from utils (unchanged)
+    _, aux_opt = configure_optimizers(tensorf, args)
     return main_opt, aux_opt
 
 
@@ -384,12 +372,6 @@ def reconstruction(args):
         lr_factor = args.lr_decay_target_ratio ** (1 / args.n_iters)
     print("lr decay", args.lr_decay_target_ratio, args.lr_decay_iters)
 
-    # warm-up adaptors if requested
-    if getattr(args, "resume_system_ckpt", None):
-        print("[resume] Skipping warm-up; using codec from resume checkpoint.")
-    else:
-        _codec_warmup_if_needed(tensorf, args, writer, logdir)
-
     # -------------------- rays & sampler --------------------
     torch.cuda.empty_cache()
     allrays, allrgbs = train_dataset.all_rays, train_dataset.all_rgbs
@@ -426,13 +408,13 @@ def reconstruction(args):
         rays_train, rgb_train = allrays[ray_idx], allrgbs[ray_idx].to(device)
 
         # pre-render compression (adaptor path) if requested
+        using_jpeg = (getattr(args, "codec_backend", "jpeg") == "jpeg")
+
         if args.compression and args.compress_before_volrend:
-            if args.decode_from_latent_code:
-                coding_output = tensorf.decode_all_planes(mode="train")
+            if using_jpeg:
+                coding_output = tensorf.compress_with_external_codec(mode="train")
             else:
-                coding_output = tensorf.compress_with_external_codec(
-                    tensorf.den_feat_codec, tensorf.app_feat_codec, mode="train"
-                )
+                raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
         else:
             coding_output = None
 
@@ -446,17 +428,15 @@ def reconstruction(args):
 
         # (optional) rate loss from adaptor codec
         if args.compression:
-            if args.compress_before_volrend:
-                den_like = coding_output["den"]["rec_likelihood"]
-                app_like = coding_output["app"]["rec_likelihood"]
+            if using_jpeg:
+                # JPEG path: no entropy likelihoods; optionally *log* bits but don't penalize.
+                den_bits = sum(p["bits"] for p in coding_output["den"]["rec_likelihood"])
+                app_bits = sum(p["bits"] for p in coding_output["app"]["rec_likelihood"])
+                writer.add_scalar("train/den_bits", den_bits, global_step=it)
+                writer.add_scalar("train/app_bits", app_bits, global_step=it)
+                rate_loss = 0.0   # or keep a tiny penalty if you want: args.rate_weight * (den_bits+app_bits)
             else:
-                den_like, app_like = tensorf.get_rate()
-            den_rate = _rate_from_likelihoods(den_like)
-            app_rate = _rate_from_likelihoods(app_like)
-            rate_loss = args.den_rate_weight * den_rate + args.app_rate_weight * app_rate
-            writer.add_scalar("train/density_rate_loss", den_rate, global_step=it)
-            writer.add_scalar("train/app_rate_loss", app_rate, global_step=it)
-            writer.add_scalar("train/rate_loss", rate_loss, global_step=it)
+                raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
         else:
             rate_loss = 0.0
 
@@ -493,13 +473,6 @@ def reconstruction(args):
         loss.backward()
         optimizer.step()
 
-        # aux optimizer for entropy model
-        if args.compression:
-            aux_optimizer.zero_grad()
-            aux_loss = tensorf.get_aux_loss()
-            aux_loss.backward()
-            aux_optimizer.step()
-            writer.add_scalar("train/aux_loss", aux_loss, global_step=it)
 
         # metrics & lr decay logging
         PSNRs.append(-10.0 * np.log(mse.detach().item()) / np.log(10.0))
@@ -518,30 +491,17 @@ def reconstruction(args):
         # periodic visualization on test set
         if it % args.vis_every == args.vis_every - 1 and args.N_vis != 0:
             if args.compression:
-                with torch.no_grad():
-                    # freeze/update priors for fair evaluation
-                    tensorf.den_feat_codec.update(force=True)
-                    tensorf.app_feat_codec.update(force=True)
-                    tensorf.den_feat_codec.eval()
-                    tensorf.app_feat_codec.eval()
-                    if args.compress_before_volrend:
-                        _ = tensorf.compress_with_external_codec(
-                            tensorf.den_feat_codec.eval(), tensorf.app_feat_codec.eval(), mode="eval"
+                if using_jpeg:
+                    with torch.no_grad():
+                        _ = tensorf.compress_with_external_codec(mode="eval")
+                        PSNRs_test = evaluation(
+                            test_dataset, tensorf, args, renderer, f"{logdir}/imgs_vis/",
+                            N_vis=args.N_vis, prtx=f"jpeg{it:06d}_", N_samples=nSamples,
+                            white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
                         )
-                    PSNRs_test = evaluation(
-                        test_dataset, tensorf, args, renderer, f"{logdir}/imgs_vis/",
-                        N_vis=args.N_vis, prtx=f"compress{it:06d}_", N_samples=nSamples,
-                        white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
-                    )
-                    writer.add_scalar("test/psnr_compress", np.mean(PSNRs_test), global_step=it)
-                    tensorf.den_feat_codec.train(); tensorf.app_feat_codec.train()
-            else:
-                PSNRs_test = evaluation(
-                    test_dataset, tensorf, args, renderer, f"{logdir}/imgs_vis/",
-                    N_vis=args.N_vis, prtx=f"{it:06d}_", N_samples=nSamples,
-                    white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
-                )
-                writer.add_scalar("test/psnr", np.mean(PSNRs_test), global_step=it)
+                        writer.add_scalar("test/psnr_compress", np.mean(PSNRs_test), global_step=it)
+                else:
+                    raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
 
         # AlphaMask update / upsample schedules
         if it in update_AlphaMask_list:
@@ -590,17 +550,13 @@ def reconstruction(args):
     if args.render_test:
         os.makedirs(f"{logdir}/imgs_test_all", exist_ok=True)
         if args.compression:
-            tensorf.den_feat_codec.update(force=True)
-            tensorf.app_feat_codec.update(force=True)
-            tensorf.den_feat_codec.eval()
-            tensorf.app_feat_codec.eval()
-            if args.compress_before_volrend:
-                out = tensorf.compress_with_external_codec(
-                    tensorf.den_feat_codec, tensorf.app_feat_codec, mode="eval"
-                )
-                den_rate = sum([p["strings_length"] for p in out["den"]["rec_likelihood"]])
-                app_rate = sum([p["strings_length"] for p in out["app"]["rec_likelihood"]])
-                print(f"====> Final bitstream size: {(den_rate+app_rate)*1e-6:0.4f} MB")
+            if using_jpeg:
+                out = tensorf.compress_with_external_codec(mode="eval")
+                den_bits = sum([p["bits"] for p in out["den"]["rec_likelihood"]])
+                app_bits = sum([p["bits"] for p in out["app"]["rec_likelihood"]])
+                print(f"====> Final JPEG size: {(den_bits+app_bits)*1e-6:0.4f} Mb (bits)")
+            else:
+               raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
         PSNRs_test = evaluation(
             test_dataset, tensorf, args, renderer, f"{logdir}/imgs_test_all/",
             N_vis=-1, N_samples=10, white_bg=white_bg, ndc_ray=ndc_ray, device=device,
