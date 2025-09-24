@@ -1,26 +1,16 @@
 import os
 import json
-import glob
-import os
-import pdb
 import sys
-import time
-import json
-import random
-import datetime
 import math
 import argparse
-
+import numpy as np
 import torch
-from torch.utils.tensorboard import SummaryWriter
 from tqdm.auto import tqdm
+
 from renderer import OctreeRender_trilinear_fast as renderer
-
-from opt import config_parser
-from renderer import *
-from utils import *
 from dataLoader import dataset_dict
-
+from renderer import evaluation
+from utils import cal_n_samples
 # ---------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------
@@ -39,75 +29,168 @@ def set_seed(seed: int = 20211202):
     torch.backends.cudnn.benchmark = False
 
 
-# ---------------------------------------------------------------------
-# Model (resume) build — mirrors training’s resume path
+# ---------------- buffer shape alignment helpers ----------------
+
 def _resize_eb_buffers_to_ckpt(eb, ckpt_state, prefix):
     """
-    Make the target entropy_bottleneck buffers have the same shapes
-    as those stored in the checkpoint, so load_state_dict won't fail.
-
-    prefix e.g.: "den_feat_codec.entropy_bottleneck" or "app_feat_codec.entropy_bottleneck"
+    Align EntropyBottleneck buffers to the shapes in `ckpt_state` so load_state_dict won't fail.
+    prefix examples:
+      "den_feat_codec.entropy_bottleneck"
+      "app_feat_codec.entropy_bottleneck"
     """
-    # Which buffers to align if present in ckpt
     for name in ["_quantized_cdf", "_offset", "_cdf_length"]:
         k = f"{prefix}.{name}"
         if k in ckpt_state:
             src = ckpt_state[k]
-            # Re-register the buffer with the right shape/dtype/device
-            # (replace the existing one so load_state_dict sees matching shapes)
             try:
-                # Delete old buffer if it exists
                 delattr(eb, name)
             except Exception:
                 pass
             eb.register_buffer(name, torch.zeros_like(src, device=src.device, dtype=src.dtype))
 
 
+def _resize_gc_buffers_to_ckpt(gc, ckpt_state, prefix):
+    """
+    Align GaussianConditional buffers/param to the shapes in `ckpt_state`.
+    prefix examples:
+      "den_feat_codec.gaussian_conditional"
+      "app_feat_codec.gaussian_conditional"
+    """
+    for name in ["_quantized_cdf", "_offset", "_cdf_length", "scale_table"]:
+        k = f"{prefix}.{name}"
+        if k in ckpt_state:
+            src = ckpt_state[k]
+            # remove as buffer/param if present
+            try:
+                delattr(gc, name)
+            except Exception:
+                pass
+            # re-register as buffer (works for modern CompressAI); fallback to Parameter for old versions
+            try:
+                gc.register_buffer(name, torch.zeros_like(src, device=src.device, dtype=src.dtype))
+            except Exception:
+                from torch.nn import Parameter
+                if name == "scale_table":
+                    setattr(gc, name, Parameter(torch.zeros_like(src, device=src.device, dtype=src.dtype), requires_grad=False))
+                else:
+                    raise
+
+
+def _maybe_guess_system_ckpt(path: str):
+    """If user passes ..._compression_XXXXX.th, try to find sibling ..._system_XXXXX.th."""
+    if "_compression_" in path:
+        cand = path.replace("_compression_", "_system_")
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+# ---------------- model build (mirrors training save/load) ----------------
+
 def build_model_from_ckpt(args):
+    """
+    Preference order:
+      1) args.system_ckpt if provided and exists (full model+codec)
+      2) infer sibling *_system_*.th from args.ckpt
+      3) fallback: model-only args.ckpt + initialize codec from backbone (args.codec_ckpt)
+    """
+    from models.tensoRF import TensorVMSplit  # ensure class is registered
+
+    # 1/2) Try system checkpoint first
+    system_path = getattr(args, "system_ckpt", "") or ""
+    if not system_path:
+        system_path = _maybe_guess_system_ckpt(args.ckpt)
+        if system_path:
+            print(f"[eval] Using inferred system checkpoint: {system_path}")
+
+    if system_path and os.path.exists(system_path):
+        system = torch.load(system_path, map_location=device, weights_only=False)
+        kwargs = dict(system["kwargs"])
+        kwargs.update({"device": device})
+
+        Model = eval(args.model_name)
+        tensorf = Model(**kwargs)
+        if hasattr(tensorf, "enable_vec_qat"):
+            tensorf.enable_vec_qat()
+        tensorf.compression = True
+        tensorf.compress_before_volrend = True   # matches your recipe      
+
+        if args.compression:
+            # Create codec modules (no pretrained), then overwrite from system ckpt
+            tensorf.init_feat_codec(
+                codec_ckpt_path="",
+                loading_pretrain_param=False,
+                adaptor_q_bit=args.adaptor_q_bit,
+                codec_backbone_type=args.codec_backbone_type,
+            )
+            sd = system["state_dict"]
+            # Align EB + GC buffer shapes before load
+            _resize_eb_buffers_to_ckpt(
+                tensorf.den_feat_codec.entropy_bottleneck, sd, "den_feat_codec.entropy_bottleneck"
+            )
+            _resize_eb_buffers_to_ckpt(
+                tensorf.app_feat_codec.entropy_bottleneck, sd, "app_feat_codec.entropy_bottleneck"
+            )
+            _resize_gc_buffers_to_ckpt(
+                tensorf.den_feat_codec.gaussian_conditional, sd, "den_feat_codec.gaussian_conditional"
+            )
+            _resize_gc_buffers_to_ckpt(
+                tensorf.app_feat_codec.gaussian_conditional, sd, "app_feat_codec.gaussian_conditional"
+            )
+
+        # Load full state (TensoRF + codec + alphaMask)
+        tensorf.load(system)  # TensorBase.load uses strict=False and restores alphaMask if present
+        return tensorf
+
+    # 3) Fallback: model-only ckpt
     ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
-    kwargs = ckpt["kwargs"]; kwargs.update({"device": device})
+    kwargs = dict(ckpt["kwargs"])
+    kwargs.update({"device": device})
+
     if args.compression:
         kwargs.update({
             "compression_strategy": args.compression_strategy,
             "compress_before_volrend": args.compress_before_volrend,
         })
-        if args.vec_qat: kwargs["vec_qat"] = True
-        if args.decode_from_latent_code: kwargs["decode_from_latent_code"] = True
+        if args.vec_qat:
+            kwargs["vec_qat"] = True
+        if args.decode_from_latent_code:
+            kwargs["decode_from_latent_code"] = True
         if kwargs.get("shadingMode", args.shadingMode) != args.shadingMode:
             kwargs["shadingMode"] = args.shadingMode
 
     Model = eval(args.model_name)
     tensorf = Model(**kwargs)
 
-    # 1) Create codec modules FIRST so they exist in the module tree
     if args.compression:
+        # Initialize codec from a backbone (or default zoo)
         tensorf.init_feat_codec(
-            codec_ckpt_path=args.codec_ckpt,   # usually ""
+            codec_ckpt_path=args.codec_ckpt,
             adaptor_q_bit=args.adaptor_q_bit,
             codec_backbone_type=args.codec_backbone_type,
         )
-        if args.additional_vec:
-            tensorf.init_additional_volume(device=device)
-        tensorf.enable_vec_qat()
-
-        # 2) Align EB buffer shapes to the ckpt (BOTH den and app codecs)
+        # If the model-only ckpt actually contains codec priors, align shapes too
         sd = ckpt["state_dict"]
-        _resize_eb_buffers_to_ckpt(tensorf.den_feat_codec.entropy_bottleneck, sd,
-                                   "den_feat_codec.entropy_bottleneck")
-        _resize_eb_buffers_to_ckpt(tensorf.app_feat_codec.entropy_bottleneck, sd,
-                                   "app_feat_codec.entropy_bottleneck")
+        _resize_eb_buffers_to_ckpt(
+            tensorf.den_feat_codec.entropy_bottleneck, sd, "den_feat_codec.entropy_bottleneck"
+        )
+        _resize_eb_buffers_to_ckpt(
+            tensorf.app_feat_codec.entropy_bottleneck, sd, "app_feat_codec.entropy_bottleneck"
+        )
+        _resize_gc_buffers_to_ckpt(
+            tensorf.den_feat_codec.gaussian_conditional, sd, "den_feat_codec.gaussian_conditional"
+        )
+        _resize_gc_buffers_to_ckpt(
+            tensorf.app_feat_codec.gaussian_conditional, sd, "app_feat_codec.gaussian_conditional"
+        )
 
-    # 3) Now load all finetuned weights (including codec) safely
+    # Load model weights (and codec bits if present in ckpt)
     tensorf.load(ckpt)
-
     return tensorf
 
 
+# ---------------- rate helper (unchanged) ----------------
 
-
-# ---------------------------------------------------------------------
-# Bit-rate helper (same math as training)
-# ---------------------------------------------------------------------
 def _rate_from_likelihoods(likelihood_list):
     rate = 0
     for pack in likelihood_list:
@@ -115,9 +198,53 @@ def _rate_from_likelihoods(likelihood_list):
     return rate
 
 
-# ---------------------------------------------------------------------
-# Main evaluation
-# ---------------------------------------------------------------------
+# ---------------- sanity checks ----------------
+
+def _print_plane_stats(tensorf, title):
+    with torch.no_grad():
+        def flat_stats(name, planes):
+            if not planes:
+                print(f"[{title}] {name}: <empty>")
+                return
+            flat = torch.cat([p.reshape(-1) for p in planes], dim=0)
+            mn, mx = flat.min().item(), flat.max().item()
+            mu, sd = flat.mean().item(), flat.std(unbiased=False).item()
+            print(f"[{title}] {name}: min={mn:.6f} max={mx:.6f} mean={mu:.6f} std={sd:.6f}")
+
+        den = getattr(tensorf, "den_rec_plane", None)
+        app = getattr(tensorf, "app_rec_plane", None)
+        if den is not None and app is not None:
+            flat_stats("den_rec_plane", den)
+            flat_stats("app_rec_plane", app)
+        else:
+            print(f"[{title}] rec_planes not set yet.")
+
+
+def _assert_nonempty_rec_planes(tensorf):
+    den = getattr(tensorf, "den_rec_plane", None)
+    app = getattr(tensorf, "app_rec_plane", None)
+    assert den is not None and app is not None and len(den) == 3 and len(app) == 3, \
+        "Decoded planes are missing. Make sure compress_with_external_codec(..., mode='eval') ran."
+    with torch.no_grad():
+        dflat = torch.cat([p.reshape(-1) for p in den], dim=0)
+        aflat = torch.cat([p.reshape(-1) for p in app], dim=0)
+        assert torch.isfinite(dflat).all() and torch.isfinite(aflat).all(), "Non-finite values in decoded planes."
+        dspan = (dflat.max() - dflat.min()).item()
+        aspan = (aflat.max() - aflat.min()).item()
+        assert dspan > 0 or aspan > 0, "Decoded planes have zero dynamic range."
+
+
+def _alpha_nonempty(tensorf):
+    am = getattr(tensorf, "alphaMask", None)
+    if am is None:
+        return True
+    with torch.no_grad():
+        vol = am.alpha_volume
+        return bool((vol > 0).any().item())
+
+
+# ---------------- main evaluation ----------------
+
 @torch.no_grad()
 def run_eval(args):
     # ---------------- Dataset ----------------
@@ -132,6 +259,12 @@ def run_eval(args):
     tensorf = build_model_from_ckpt(args)
     tensorf.to(device)
 
+    # Quick sanity on alpha mask
+    if not _alpha_nonempty(tensorf):
+        print("[WARN] Loaded alphaMask is empty; renders may be blank. Check the checkpoint pairing.")
+    else:
+        print("[eval] alphaMask OK (non-empty).")
+
     # ---------------- Compression eval branch ----------------
     den_bitstream_bytes = 0
     app_bitstream_bytes = 0
@@ -145,17 +278,20 @@ def run_eval(args):
         tensorf.mode = "eval"
 
         if args.compress_before_volrend:
-            # Produce actual bitstreams (eval path)
+            # Important: run decode before rendering
             coding_output = tensorf.compress_with_external_codec(
                 tensorf.den_feat_codec, tensorf.app_feat_codec, mode="eval"
             )
+            # Basic check the streams are actually coded
             den_rate_list = coding_output["den"]["rec_likelihood"]
             app_rate_list = coding_output["app"]["rec_likelihood"]
-            # In eval path we get true coded length (strings_length)
-            # print(den_rate_list)
-            # raise Exception("Debug")
-            den_bitstream_bytes = sum([p["strings_length"] for p in den_rate_list])
-            app_bitstream_bytes = sum([p["strings_length"] for p in app_rate_list])
+            den_bitstream_bytes = sum([p.get("strings_length", 0) for p in den_rate_list])
+            app_bitstream_bytes = sum([p.get("strings_length", 0) for p in app_rate_list])
+
+            # Debug stats to ensure decoded planes are sane
+            _print_plane_stats(tensorf, "after_decode")
+            _assert_nonempty_rec_planes(tensorf)
+
         else:
             # Fallback: estimate via log-likelihoods
             den_like, app_like = tensorf.get_rate()
@@ -165,26 +301,28 @@ def run_eval(args):
             app_bitstream_bytes = int(app_bits.item() / 8.0)
 
     # ---------------- PSNR on test set ----------------
+    # Use a reasonable number of samples: if you passed a tiny value like 10, upgrade
+    nSamples = tensorf.nSamples
+
     PSNRs_test = evaluation(
         test_dataset,
         tensorf,
         args,
         renderer,
         args.save_dir if args.save_dir else "./eval_outputs/",
-        N_vis=-1,
-        N_samples=10,
+        N_vis=10,
+        N_samples=nSamples,
         white_bg=white_bg,
         ndc_ray=ndc_ray,
         device=device,
     )
 
-    # ---------------- Decoder-parameter bandwidth (our function) ----------------
+    # ---------------- Decoder-parameter bandwidth (optional) ----------------
     decoder_bits_raw = None
     decoder_bits_quant = None
     quant_breakdown = None
     raw_breakdown = None
     if args.compression and hasattr(tensorf, "estimate_codec_transmission_bits"):
-        # raw (exact serialization of current dtype)
         raw_report = tensorf.estimate_codec_transmission_bits(
             mode="raw", return_breakdown=True
         )
@@ -194,7 +332,6 @@ def run_eval(args):
             "appearance": raw_report["appearance_codec_bits"]["breakdown"],
         }
 
-        # quantized + entropy-coded estimate
         quant_report = tensorf.estimate_codec_transmission_bits(
             mode="quant-ent", q_bits=args.q_bits_est, include_header=True, return_breakdown=True
         )
@@ -208,6 +345,7 @@ def run_eval(args):
     os.makedirs(args.save_dir, exist_ok=True)
     summary = {
         "ckpt": args.ckpt,
+        "system_ckpt": getattr(args, "system_ckpt", ""),
         "dataset": args.dataset_name,
         "mean_PSNR": float(np.mean(PSNRs_test)),
         "bitstream_bytes": {
@@ -230,16 +368,16 @@ def run_eval(args):
         json.dump(summary, f, indent=2)
 
 
-# ---------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------
+# ---------------- CLI ----------------
+
 def build_argparser():
     p = argparse.ArgumentParser("Evaluate a compressed TensorVMSplit checkpoint (PSNR, bitstream size, decoder overhead).")
 
     # Required-ish
-    p.add_argument("--ckpt", type=str, required=True, help="Path to *.th checkpoint")
-    p.add_argument("--dataset_name", type=str, default="blender", help="dataset key in dataset_dict (e.g., blender)")
-    p.add_argument("--datadir", type=str, required=True, help="dataset root")
+    p.add_argument("--ckpt", type=str, required=True, help="Path to model or system *.th checkpoint")
+    p.add_argument("--system_ckpt", type=str, default="", help="Prefer loading this full system checkpoint (incl. codec)")
+    p.add_argument("--dataset_name", type=str, default="blender")
+    p.add_argument("--datadir", type=str, required=True)
     p.add_argument("--downsample_train", type=float, default=1.0)
     p.add_argument("--ndc_ray", type=int, default=0)
 
@@ -275,11 +413,4 @@ if __name__ == "__main__":
     torch.set_default_dtype(torch.float32)
     set_seed(20211202)
     args = build_argparser().parse_args()
-
-    """
-    python eval.py --ckpt log/lego_codec/version_000/lego_codec_compression.th \
-        --dataset_name blender --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego --downsample_train 1 \
-        --compression --compression_strategy adaptor_feat_coding --compress_before_volrend
-    """
-
     run_eval(args)

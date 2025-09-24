@@ -1,7 +1,7 @@
 
 dataset_name = blender
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego
-expname =  tensorste_lego_jpeg50
+expname =  tensorste_lego_jpeg80_l11e5
 basedir = ./log
 wandb_project = nerfcodec-ste-lego
 
@@ -19,10 +19,8 @@ shadingMode = MLP_Fea
 fea2denseAct = softplus
 view_pe = 2
 fea_pe = 2
-# L1_weight_inital = 8e-5
-# L1_weight_rest = 4e-5
-L1_weight_inital = 0
-L1_weight_rest = 0
+L1_weight_inital = 1e-5
+L1_weight_rest = 1e-5
 rm_weight_mask_thre = 1e-4
 
 N_vis = 5
@@ -41,7 +39,7 @@ den_packing_mode = flatten
 den_quant_mode   = global
 den_global_min   = -25.0
 den_global_max   =  25.0
-den_quality      = 50        # used if codec_backend=jpeg
+den_quality      = 80        # used if codec_backend=jpeg
 den_png_level    = -1         # used if codec_backend=png
 den_r = 4
 den_c = 4
@@ -51,7 +49,8 @@ app_packing_mode = flatten
 app_quant_mode   = global
 app_global_min   = -5.0
 app_global_max   =  5.0
-app_quality      = 50
+app_quality      = 80
 app_png_level    = -1
 app_r = 6
 app_c = 8
+

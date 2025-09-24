@@ -8,6 +8,7 @@ import random
 import datetime
 import math
 import numpy as np
+import wandb
 
 import torch
 from torch.utils.tensorboard import SummaryWriter
@@ -32,37 +33,7 @@ renderer = OctreeRender_trilinear_fast   # keep identical for compatibility
 # Utilities
 # ======================================================================================
 
-def _maybe_align_cdf_and_load_system(tensorf, system_ckpt_path):
-    """Load a 'system' checkpoint (full model incl. codec), aligning entropy CDF shapes if needed."""
-    system = torch.load(system_ckpt_path, map_location=device, weights_only=False)
-
-    # Align CDF buffers before load (prevents size mismatch across compressai versions)
-    def _maybe_zero_like(dest_mod, key):
-        if key in system["state_dict"]:
-            src_sz = system["state_dict"][key].size()
-            try:
-                getattr_from = dict(tensorf.named_buffers())
-                cur = getattr_from[key]
-                if cur.size() != src_sz:
-                    # replace with zero buffer of src size so .load_state_dict works
-                    parts = key.split(".")
-                    mod = tensorf
-                    for p in parts[:-1]:
-                        mod = getattr(mod, p)
-                    setattr(mod, parts[-1], torch.zeros(src_sz, device=cur.device, dtype=cur.dtype))
-            except Exception:
-                pass
-
-    _maybe_zero_like(tensorf, "app_feat_codec.entropy_bottleneck._quantized_cdf")
-    _maybe_zero_like(tensorf, "den_feat_codec.entropy_bottleneck._quantized_cdf")
-
-    # Load everything (TensoRF + codec)
-    tensorf.load(system, strict=False)
-    return system
-
-
 def _load_optim_states_if_any(system, optimizer, aux_optimizer):
-    """Restore optimizer states if present."""
     if ("optimizer" in system) and (system["optimizer"] is not None):
         try:
             optimizer.load_state_dict(system["optimizer"])
@@ -76,10 +47,8 @@ def _load_optim_states_if_any(system, optimizer, aux_optimizer):
     return system.get("global_step", 0)
 
 def _make_model_ckpt_dict(tensorf):
-    """Mirror tensorf.save(): pack model kwargs, state_dict, and alphaMask bundle."""
     kwargs = tensorf.get_kwargs()
     ckpt = {"kwargs": kwargs, "state_dict": tensorf.state_dict()}
-
     if getattr(tensorf, "alphaMask", None) is not None:
         alpha_volume = tensorf.alphaMask.alpha_volume.bool().cpu().numpy()
         ckpt["alphaMask.shape"] = alpha_volume.shape
@@ -88,20 +57,12 @@ def _make_model_ckpt_dict(tensorf):
     return ckpt
 
 def _save_system_ckpt(path, tensorf, optimizer, aux_optimizer, global_step, kwargs_override=None):
-    """
-    Save a resume-able checkpoint that still contains the same fields
-    tensorf.save() used to write (incl. alphaMask) PLUS optimizers & step.
-    """
     base = _make_model_ckpt_dict(tensorf)
-
-    # Optionally override kwargs (e.g., when saving right after building from args)
     if kwargs_override is not None:
         base["kwargs"] = kwargs_override
-
     base["optimizer"]     = optimizer.state_dict()     if optimizer     is not None else None
     base["aux_optimizer"] = aux_optimizer.state_dict() if aux_optimizer is not None else None
     base["global_step"]   = int(global_step)
-
     torch.save(base, path)
 
 def set_seed(seed: int = 20211202):
@@ -116,13 +77,11 @@ def set_seed(seed: int = 20211202):
 
 
 class SimpleSampler:
-    """Random permutation mini-batch sampler over a fixed ray set."""
     def __init__(self, total: int, batch: int):
         self.total = total
         self.batch = batch
         self.curr = total
         self.ids = None
-
     def nextids(self):
         self.curr += self.batch
         if self.curr + self.batch > self.total:
@@ -146,77 +105,43 @@ def _build_log_dir(args) -> str:
 def _derive_schedule_lists(args):
     upsamp = args.upsamp_list
     updateA = args.update_AlphaMask_list
-    # under adaptor finetune we freeze spatial refinement (NeRFCodec behavior)
     if getattr(args, "compression", False):
         upsamp = [100001]
         updateA = [100001]
     return upsamp, updateA
 
-
-def _rate_from_likelihoods(likelihood_list):
-    # identical to original; used when adaptor codec exposes likelihoods
-    rate = 0
-    for pack in likelihood_list:
-        rate += sum((torch.log(l).sum() / (-math.log(2))) for l in pack["likelihoods"].values())
-    return rate
-
-
-def _codec_warmup_if_needed(tensorf, args, writer, logdir):
-    if not args.warm_up:
-        return
-    if args.warm_up_ckpt != "":
-        # load pre-warmed adaptors
-        tensorf.den_feat_codec.load_state_dict(
-            torch.load(f"{args.warm_up_ckpt}/den_feat_codec_{args.warm_up_iters}.pth", weights_only=False)
-        )
-        tensorf.app_feat_codec.load_state_dict(
-            torch.load(f"{args.warm_up_ckpt}/app_feat_codec_{args.warm_up_iters}.pth", weights_only=False)
-        )
-        print("Loaded warm-up codec weights.")
-        return
-
-    print("Warm-up adaptor (only) ...")
-    codec_grads, _ = tensorf.get_optparam_from_feat_codec(
-        args.lr_feat_codec, fix_decoder_prior=args.fix_decoder_prior, fix_encoder_prior=True
-    )
-    opt = torch.optim.Adam(codec_grads, betas=(0.9, 0.99))
-    os.makedirs(f"{logdir}/warm_up_feat", exist_ok=True)
-
-    for it in tqdm(range(args.warm_up_iters + 1)):
-        out = tensorf.compress_with_external_codec(tensorf.den_feat_codec, tensorf.app_feat_codec, mode="train")
-        loss = features_rec_loss(tensorf, out)
-        opt.zero_grad()
-        loss.backward()
-        opt.step()
-        writer.add_scalar("warm_up/feat_rec_loss", loss, global_step=it)
-
-        if it == args.warm_up_iters:
-            torch.save(tensorf.den_feat_codec.state_dict(), f"{logdir}/den_feat_codec_{it}.pth")
-            torch.save(tensorf.app_feat_codec.state_dict(), f"{logdir}/app_feat_codec_{it}.pth")
-
-    del opt
-    torch.cuda.empty_cache()
-
-
 # ======================================================================================
 # Model build
 # ======================================================================================
 
-def _build_model(args, aabb, reso_cur, near_far):
-    """
-    Two backends:
-      - 'jpeg'    : TensorSTE (STE+JPEG planes)
-      - 'adaptor' : TensorVMSplit + CompressAI adaptors (legacy)
-    """
-    using_jpeg = (getattr(args, "codec_backend", "jpeg") == "jpeg")
-    Model = eval(args.model_name) if hasattr(args, "model_name") else (TensorSTE if using_jpeg else TensorVMSplit)
+def _build_jpegste_cfg_from_args(args) -> JPEGPlanesCfg:
+    return JPEGPlanesCfg(
+        align=args.align,
+        codec=args.codec_backend,                         # 'jpeg' or 'png'
+        # density
+        den_packing_mode=args.den_packing_mode,
+        den_quant_mode=args.den_quant_mode,
+        den_global_range=(args.den_global_min, args.den_global_max),
+        den_quality=args.den_quality,
+        den_png_level=args.den_png_level,
+        den_r=args.den_r, den_c=args.den_c,
+        # appearance
+        app_packing_mode=args.app_packing_mode,
+        app_quant_mode=args.app_quant_mode,
+        app_global_range=(args.app_global_min, args.app_global_max),
+        app_quality=args.app_quality,
+        app_png_level=args.app_png_level,
+        app_r=args.app_r, app_c=args.app_c,
+    )
 
-    # --------- resume path (pretrained TensoRF -> finetune) ----------
+def _build_model(args, aabb, reso_cur, near_far):
+    using_tensorste = (getattr(args, "codec_backend", "jpeg") in ("jpeg", "png"))
+    Model = TensorSTE if using_tensorste else eval(args.model_name)
+
+    # --------- resume (pretrained TensoRF -> finetune) ----------
     if args.ckpt is not None:
         ckpt = torch.load(args.ckpt, map_location=device, weights_only=False)
         kwargs = ckpt["kwargs"]; kwargs.update({"device": device})
-
-        # align finetune flags
         if args.compression:
             kwargs.update({"compress_before_volrend": True})
             if kwargs.get("shadingMode", args.shadingMode) != args.shadingMode:
@@ -225,21 +150,13 @@ def _build_model(args, aabb, reso_cur, near_far):
         tensorf = Model(**kwargs)
         tensorf.load(ckpt)
 
-        if using_jpeg:
-            # init JPEG config
-            jpeg_cfg = JPEGPlanesCfg(
-                plane_packing_mode=args.jpeg_plane_packing_mode,
-                quant_mode=args.jpeg_quant_mode,
-                global_range=(args.jpeg_global_min, args.jpeg_global_max),
-                align=args.jpeg_align,
-                quality=args.jpeg_quality,
-            )
-            tensorf.init_ste(jpeg_cfg)
+        if using_tensorste:
+            cfg = _build_jpegste_cfg_from_args(args)
+            tensorf.init_ste(cfg)
             tensorf.set_ste(bool(args.ste_enabled))
-            tensorf.enable_vec_qat()  # optional: QAT for line factors only
+            tensorf.enable_vec_qat()
         else:
-            raise Exception("Adaptor codec finetune from TensoRF not supported; please use JPEG+STE backend.")
-
+            raise Exception("Legacy adaptor path disabled in this script.")
         return tensorf
 
     # --------- train from scratch ----------
@@ -258,47 +175,22 @@ def _build_model(args, aabb, reso_cur, near_far):
         fea2denseAct=args.fea2denseAct,
     )
 
-    if using_jpeg:
-        jpeg_cfg = JPEGPlanesCfg(
-            plane_packing_mode=args.jpeg_plane_packing_mode,
-            quant_mode=args.jpeg_quant_mode,
-            global_range=(args.jpeg_global_min, args.jpeg_global_max),
-            align=args.jpeg_align,
-            quality=args.jpeg_quality,
-        )
-        tensorf.init_ste(jpeg_cfg)
+    if using_tensorste:
+        cfg = _build_jpegste_cfg_from_args(args)
+        tensorf.init_ste(cfg)
         tensorf.set_ste(bool(args.ste_enabled))
         tensorf.enable_vec_qat()
     else:
-        raise Exception("Adaptor codec training from scratch not supported; please use JPEG+STE backend.")
-
+        raise Exception("Legacy adaptor path disabled in this script.")
     return tensorf
 
 
-
 def _configure_optimizers(tensorf, args):
-    using_jpeg = (getattr(args, "codec_backend", "jpeg") == "jpeg")
-
     if not args.compression:
         grad_vars = tensorf.get_optparam_groups(args.lr_init, args.lr_basis)
         return torch.optim.Adam(grad_vars, betas=(0.9, 0.99)), None
 
-    if using_jpeg:
-        # Optimize only TensoRF (and optional extras); no aux optimizer
-        if not args.resume_finetune:
-            grad_vars = tensorf.get_optparam_groups(
-                lr_init_spatialxyz=2e-3, lr_init_network=1e-4, fix_plane=args.fix_triplane
-            )
-        else:
-            grad_vars = tensorf.get_optparam_groups(lr_init_spatialxyz=2e-3, lr_init_network=0)
-
-        if args.additional_vec:
-            grad_vars += tensorf.get_additional_optparam_groups(lr_init_spatialxyz=2e-3)
-
-        main_opt = torch.optim.Adam(grad_vars, betas=(0.9, 0.99))
-        return main_opt, None
-
-    # ---- legacy adaptor backend (unchanged) ----
+    # STE/JPEG/PNG: optimize only TensoRF (plus optional extras)
     if not args.resume_finetune:
         grad_vars = tensorf.get_optparam_groups(
             lr_init_spatialxyz=2e-3, lr_init_network=1e-4, fix_plane=args.fix_triplane
@@ -306,21 +198,11 @@ def _configure_optimizers(tensorf, args):
     else:
         grad_vars = tensorf.get_optparam_groups(lr_init_spatialxyz=2e-3, lr_init_network=0)
 
-    codec_grad, aux_grad = tensorf.get_optparam_from_feat_codec(
-        args.lr_feat_codec,
-        fix_decoder_prior=args.fix_decoder_prior,
-        fix_encoder_prior=getattr(args, "fix_encoder_prior", False),
-    )
-    grad_vars += codec_grad
-
     if args.additional_vec:
         grad_vars += tensorf.get_additional_optparam_groups(lr_init_spatialxyz=2e-3)
-    if args.decode_from_latent_code:
-        grad_vars += tensorf.get_latent_code_groups(lr_latent_code=args.lr_latent_code)
 
     main_opt = torch.optim.Adam(grad_vars, betas=(0.9, 0.99))
-    _, aux_opt = configure_optimizers(tensorf, args)
-    return main_opt, aux_opt
+    return main_opt, None
 
 
 # ======================================================================================
@@ -328,6 +210,21 @@ def _configure_optimizers(tensorf, args):
 # ======================================================================================
 
 def reconstruction(args):
+    # -------------------- W&B init --------------------
+    logdir = _build_log_dir(args)
+    os.makedirs(logdir, exist_ok=True)
+    os.makedirs(f"{logdir}/imgs_vis", exist_ok=True)
+    with open(f"{logdir}/train_cfg.json", "w") as f:
+        json.dump(vars(args), f)
+
+    wandb.init(
+        project=args.wandb_project,
+        name=args.expname,
+        dir=logdir,
+        config=vars(args),
+        mode=("disabled" if getattr(args, "wandb_off", 0) else "online"),
+    )
+
     # -------------------- dataset --------------------
     dataset = dataset_dict[args.dataset_name]
     train_dataset = dataset(args.datadir, split="train", downsample=args.downsample_train, is_stack=False)
@@ -336,15 +233,8 @@ def reconstruction(args):
     near_far = train_dataset.near_far
     ndc_ray  = args.ndc_ray
 
-    # -------------------- schedules & logdir --------------------
+    # -------------------- schedules --------------------
     upsamp_list, update_AlphaMask_list = _derive_schedule_lists(args)
-    logdir = _build_log_dir(args)
-    print(f"[logdir] {logdir}")
-    os.makedirs(logdir, exist_ok=True)
-    os.makedirs(f"{logdir}/imgs_vis", exist_ok=True)
-    writer = SummaryWriter(logdir)
-    with open(f"{logdir}/train_cfg.json", "w") as f:
-        json.dump(vars(args), f)
 
     # -------------------- model --------------------
     aabb = train_dataset.scene_bbox.to(device)
@@ -364,7 +254,7 @@ def reconstruction(args):
     if getattr(args, "feat_rec_loss", 0):
         tensorf.copy_pretrain_feats()
 
-    # learning-rate decay (with your codec run: target_ratio=1 ⇒ no decay)
+    # LR decay
     if args.lr_decay_iters > 0:
         lr_factor = args.lr_decay_target_ratio ** (1 / args.lr_decay_iters)
     else:
@@ -388,15 +278,8 @@ def reconstruction(args):
     PSNRs, PSNRs_test = [], [0.0]
     final_it = 0
 
+    # resume global step if you load a system ckpt with states (optional)
     start_iter = 0
-    if getattr(args, "resume_system_ckpt", None):
-        # load optimizer states (optional)
-        if getattr(args, "resume_optim", 0):
-            system = torch.load(args.resume_system_ckpt, map_location=device, weights_only=False)
-            start_iter = system.get("global_step", 0)
-            _load_optim_states_if_any(system, optimizer, aux_optimizer)
-
-    # how many more steps to run
     extra_iters = getattr(args, "extra_iters", 0) or args.n_iters
     end_iter = start_iter + extra_iters
     print(f"[resume] starting at iter={start_iter}, running to {end_iter}")
@@ -407,16 +290,10 @@ def reconstruction(args):
         ray_idx = sampler.nextids()
         rays_train, rgb_train = allrays[ray_idx], allrgbs[ray_idx].to(device)
 
-        # pre-render compression (adaptor path) if requested
-        using_jpeg = (getattr(args, "codec_backend", "jpeg") == "jpeg")
-
+        # pre-render compression (our STE codec)
+        coding_output = None
         if args.compression and args.compress_before_volrend:
-            if using_jpeg:
-                coding_output = tensorf.compress_with_external_codec(mode="train")
-            else:
-                raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
-        else:
-            coding_output = None
+            coding_output = tensorf.compress_with_external_codec(mode="train")
 
         # render
         rgb_map, _, depth_map, _, _ = renderer(
@@ -426,61 +303,60 @@ def reconstruction(args):
         del depth_map
         torch.cuda.empty_cache()
 
-        # (optional) rate loss from adaptor codec
-        if args.compression:
-            if using_jpeg:
-                # JPEG path: no entropy likelihoods; optionally *log* bits but don't penalize.
-                den_bits = sum(p["bits"] for p in coding_output["den"]["rec_likelihood"])
-                app_bits = sum(p["bits"] for p in coding_output["app"]["rec_likelihood"])
-                writer.add_scalar("train/den_bits", den_bits, global_step=it)
-                writer.add_scalar("train/app_bits", app_bits, global_step=it)
-                rate_loss = 0.0   # or keep a tiny penalty if you want: args.rate_weight * (den_bits+app_bits)
-            else:
-                raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
-        else:
-            rate_loss = 0.0
+        # bits logging (six streams)
+        log_bits = {}
+        if args.compression and coding_output is not None:
+            den_packs = coding_output["den"]["rec_likelihood"]
+            app_packs = coding_output["app"]["rec_likelihood"]
+            for i, pack in enumerate(den_packs):
+                log_bits[f"bits/den_{i}"] = int(pack["bits"])
+            for i, pack in enumerate(app_packs):
+                log_bits[f"bits/app_{i}"] = int(pack["bits"])
+            log_bits["bits/den_total"] = sum(log_bits[f"bits/den_{i}"] for i in range(len(den_packs)))
+            log_bits["bits/app_total"] = sum(log_bits[f"bits/app_{i}"] for i in range(len(app_packs)))
+            log_bits["bits/total"]     = log_bits["bits/den_total"] + log_bits["bits/app_total"]
 
-        # reconstruction loss + regs
+        # reconstruction + regs
         mse = torch.mean((rgb_map - rgb_train) ** 2)
         loss = mse
 
         if Ortho_w > 0:
             loss_reg = tensorf.vector_comp_diffs()
             loss += Ortho_w * loss_reg
-            writer.add_scalar("train/reg", loss_reg.detach().item(), global_step=it)
+            wandb.log({"train/reg": float(loss_reg)}, step=it)
         if L1_w > 0:
             loss_l1 = tensorf.density_L1()
             loss += L1_w * loss_l1
-            writer.add_scalar("train/reg_l1", loss_l1.detach().item(), global_step=it)
+            wandb.log({"train/reg_l1": float(loss_l1)}, step=it)
         if TV_w_d > 0:
             TV_w_d *= lr_factor
             loss_tv = tensorf.TV_loss_density(tvreg) * TV_w_d
             loss += loss_tv
-            writer.add_scalar("train/reg_tv_density", loss_tv.detach().item(), global_step=it)
+            wandb.log({"train/reg_tv_density": float(loss_tv)}, step=it)
         if TV_w_a > 0:
             TV_w_a *= lr_factor
             loss_tv = tensorf.TV_loss_app(tvreg) * TV_w_a
             loss += loss_tv
-            writer.add_scalar("train/reg_tv_app", loss_tv.detach().item(), global_step=it)
-        if args.compression and args.rate_penalty:
-            loss = loss + rate_loss * 1e-9
+            wandb.log({"train/reg_tv_app": float(loss_tv)}, step=it)
         if getattr(args, "feat_rec_loss", 0):
             feat_rec = features_rec_loss(tensorf, coding_output)
             loss += 1e-2 * feat_rec
-            writer.add_scalar("train/feat_rec_loss", feat_rec, global_step=it)
+            wandb.log({"train/feat_rec_loss": float(feat_rec)}, step=it)
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-
         # metrics & lr decay logging
-        PSNRs.append(-10.0 * np.log(mse.detach().item()) / np.log(10.0))
-        writer.add_scalar("train/PSNR", PSNRs[-1], global_step=it)
-        writer.add_scalar("train/mse", mse.detach().item(), global_step=it)
+        psnr = -10.0 * np.log(mse.detach().item()) / np.log(10.0)
+        PSNRs.append(psnr)
+        log = {"train/PSNR": float(psnr), "train/mse": float(mse.detach().item())}
+        log.update(log_bits)
+        # LR decay
         for g in optimizer.param_groups:
             g["lr"] = g["lr"] * lr_factor
-            writer.add_scalar("lr", g["lr"], global_step=it)
+        log["lr"] = float(optimizer.param_groups[0]["lr"])
+        wandb.log(log, step=it)
 
         if it % args.progress_refresh_rate == 0:
             pbar.set_description(
@@ -491,17 +367,21 @@ def reconstruction(args):
         # periodic visualization on test set
         if it % args.vis_every == args.vis_every - 1 and args.N_vis != 0:
             if args.compression:
-                if using_jpeg:
-                    with torch.no_grad():
-                        _ = tensorf.compress_with_external_codec(mode="eval")
-                        PSNRs_test = evaluation(
-                            test_dataset, tensorf, args, renderer, f"{logdir}/imgs_vis/",
-                            N_vis=args.N_vis, prtx=f"jpeg{it:06d}_", N_samples=nSamples,
-                            white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
-                        )
-                        writer.add_scalar("test/psnr_compress", np.mean(PSNRs_test), global_step=it)
-                else:
-                    raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
+                with torch.no_grad():
+                    _ = tensorf.compress_with_external_codec(mode="eval")
+                    PSNRs_test = evaluation(
+                        test_dataset, tensorf, args, renderer, f"{logdir}/imgs_vis/",
+                        N_vis=args.N_vis, prtx=f"{args.codec_backend}{it:06d}_", N_samples=nSamples,
+                        white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
+                    )
+                    wandb.log({"test/PSNR": float(np.mean(PSNRs_test))}, step=it)
+            else:
+                PSNRs_test = evaluation(
+                    test_dataset, tensorf, args, renderer, f"{logdir}/imgs_vis/",
+                    N_vis=args.N_vis, prtx=f"{it:06d}_", N_samples=nSamples,
+                    white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
+                )
+                wandb.log({"test/PSNR": float(np.mean(PSNRs_test))}, step=it)
 
         # AlphaMask update / upsample schedules
         if it in update_AlphaMask_list:
@@ -533,38 +413,33 @@ def reconstruction(args):
             grad_vars = tensorf.get_optparam_groups(args.lr_init * lr_scale, args.lr_basis * lr_scale)
             optimizer = torch.optim.Adam(grad_vars, betas=(0.9, 0.99))
 
-        # -------------------- save final --------------------
-        if (final_it+1) % args.save_every == 0:
-            if args.compression:
-                # Save codec modules and planes
-                tensorf.save(f"{logdir}/{args.expname}_compression_{final_it}.th")
-
-                # Save a full system checkpoint for exact resumption of training
-                save_path = f"{logdir}/{args.expname}_system_{final_it}.th" if args.compression else f"{logdir}/{args.expname}.th"
-                kwargs = tensorf.get_kwargs()
-                _save_system_ckpt(save_path, tensorf, optimizer, aux_optimizer, final_it, kwargs)
-            else:
-                tensorf.save(f"{logdir}/{args.expname}.th")
+        # -------------------- save periodic --------------------
+        if (final_it + 1) % args.save_every == 0:
+            tensorf.save(f"{logdir}/{args.expname}_compression_{final_it}.th")
+            save_path = f"{logdir}/{args.expname}_system_{final_it}.th"
+            kwargs = tensorf.get_kwargs()
+            _save_system_ckpt(save_path, tensorf, optimizer, aux_optimizer, final_it, kwargs)
 
     # -------------------- final evals --------------------
     if args.render_test:
         os.makedirs(f"{logdir}/imgs_test_all", exist_ok=True)
         if args.compression:
-            if using_jpeg:
-                out = tensorf.compress_with_external_codec(mode="eval")
-                den_bits = sum([p["bits"] for p in out["den"]["rec_likelihood"]])
-                app_bits = sum([p["bits"] for p in out["app"]["rec_likelihood"]])
-                print(f"====> Final JPEG size: {(den_bits+app_bits)*1e-6:0.4f} Mb (bits)")
-            else:
-               raise Exception("Adaptor codec not supported; please use JPEG+STE backend.")
+            out = tensorf.compress_with_external_codec(mode="eval")
+            den_bits = sum([p["bits"] for p in out["den"]["rec_likelihood"]])
+            app_bits = sum([p["bits"] for p in out["app"]["rec_likelihood"]])
+            print(f"====> Final {args.codec_backend.upper()} size (bits): {(den_bits+app_bits):.0f}")
+            wandb.log({
+                "final/bits_den_total": int(den_bits),
+                "final/bits_app_total": int(app_bits),
+                "final/bits_total":     int(den_bits + app_bits),
+            })
         PSNRs_test = evaluation(
             test_dataset, tensorf, args, renderer, f"{logdir}/imgs_test_all/",
             N_vis=-1, N_samples=10, white_bg=white_bg, ndc_ray=ndc_ray, device=device,
         )
-        SummaryWriter(logdir).add_scalar("test/psnr_all", np.mean(PSNRs_test), global_step=final_it)
+        wandb.log({"final/test_PSNR_all": float(np.mean(PSNRs_test))}, step=final_it)
         print(f"======> {args.expname} test all psnr: {np.mean(PSNRs_test)} <======")
 
-    # (optional) train-set render on pretrain path if you keep render_train=1 in your cfg
     if args.render_train:
         os.makedirs(f"{logdir}/imgs_train_all", exist_ok=True)
         train_eval = dataset(args.datadir, split="train", downsample=args.downsample_train, is_stack=True)
@@ -572,7 +447,6 @@ def reconstruction(args):
             train_eval, tensorf, args, renderer, f"{logdir}/imgs_train_all/",
             N_vis=-1, N_samples=-1, white_bg=white_bg, ndc_ray=ndc_ray, device=device
         )
-
 
 # ======================================================================================
 # Main

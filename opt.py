@@ -3,15 +3,36 @@ import configargparse
 def config_parser(cmd=None):
     parser = configargparse.ArgumentParser()
     ####
-    group = parser.add_argument_group("jpeg_ste")
-    group.add_argument("--codec_backend", type=str, default="jpeg", choices=["jpeg", "adaptor"])
-    group.add_argument("--jpeg_quality", type=int, default=85)
-    group.add_argument("--jpeg_plane_packing_mode", type=str, default="flatten")    # or "sandwich", etc.
-    group.add_argument("--jpeg_quant_mode", type=str, default="global")          # we use "global"
-    group.add_argument("--jpeg_global_min", type=float, default=-20.0)
-    group.add_argument("--jpeg_global_max", type=float, default=20.0)
-    group.add_argument("--jpeg_align", type=int, default=64)
-    group.add_argument("--ste_enabled", type=int, default=1)  
+     # ----------------- logging -----------------
+    parser.add_argument("--wandb_project", type=str, default="nerfcodec-ste")
+    parser.add_argument("--wandb_off", type=int, default=0)  # 1 to disable (offline)
+
+    # ----------------- STE codec backend -----------------
+    group = parser.add_argument_group("ste_codec")
+    group.add_argument("--codec_backend", type=str, default="jpeg", choices=["jpeg", "png"])  # TensorSTE backends
+    group.add_argument("--align", type=int, default=64)
+    group.add_argument("--ste_enabled", type=int, default=1)
+
+    # density config
+    group.add_argument("--den_packing_mode", type=str, default="flatten")
+    group.add_argument("--den_quant_mode",   type=str, default="global", choices=["global", "per_channel"])
+    group.add_argument("--den_global_min",   type=float, default=-25.0)
+    group.add_argument("--den_global_max",   type=float, default= 25.0)
+    group.add_argument("--den_quality",      type=int,   default=None)   # used if codec=jpeg
+    group.add_argument("--den_png_level",    type=int,   default=None)    # used if codec=png (0..9)
+    group.add_argument("--den_r",            type=int,   default=4)
+    group.add_argument("--den_c",            type=int,   default=4)
+
+    # appearance config
+    group.add_argument("--app_packing_mode", type=str, default="flatten")
+    group.add_argument("--app_quant_mode",   type=str, default="global", choices=["global", "per_channel"])
+    group.add_argument("--app_global_min",   type=float, default=-5.0)
+    group.add_argument("--app_global_max",   type=float, default= 5.0)
+    group.add_argument("--app_quality",      type=int,   default=None)   # jpeg
+    group.add_argument("--app_png_level",    type=int,   default=None)    # png
+    group.add_argument("--app_r",            type=int,   default=6)
+    group.add_argument("--app_c",            type=int,   default=8)
+    
     ####
     parser.add_argument('--resume_system_ckpt', action='store_true', default=False)
     parser.add_argument('--resume_optim', action='store_true', default=False)

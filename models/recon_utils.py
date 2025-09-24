@@ -35,6 +35,60 @@ def jpeg_roundtrip_color(img_f01_bgr: np.ndarray, quality: int) -> Tuple[np.ndar
         raise RuntimeError("cv2.imdecode failed")
     return to_float01_from_uint8(dec), bits
 
+# ======================== CODEC ROUND-TRIPS (mono + color) ========================
+
+def jpeg_roundtrip_mono(img_f01: np.ndarray, quality: int) -> Tuple[np.ndarray, int]:
+    """
+    JPEG encode/decode for a MONO image.
+    img_f01: HxW float in [0,1]
+    Returns: (decoded_f01, bits)
+    """
+    assert img_f01.ndim == 2, f"expected HxW mono, got {img_f01.shape}"
+    img_u8 = to_uint8_from_float01(img_f01)             # HxW uint8
+    ok, buf = cv2.imencode(".jpg", img_u8, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
+    if not ok:
+        raise RuntimeError("cv2.imencode(.jpg, mono) failed")
+    bits = int(buf.size) * 8
+    dec = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)       # HxW uint8
+    if dec is None:
+        raise RuntimeError("cv2.imdecode mono failed")
+    return to_float01_from_uint8(dec), bits
+
+
+def png_roundtrip_mono(img_f01: np.ndarray, level: int = 6) -> Tuple[np.ndarray, int]:
+    """
+    PNG encode/decode for a MONO image (lossless).
+    level: 0..9 (higher = smaller, slower). OpenCV default is 3 or 6 depending on build.
+    """
+    assert img_f01.ndim == 2, f"expected HxW mono, got {img_f01.shape}"
+    img_u8 = to_uint8_from_float01(img_f01)             # HxW uint8
+    ok, buf = cv2.imencode(".png", img_u8, [cv2.IMWRITE_PNG_COMPRESSION, int(level)])
+    if not ok:
+        raise RuntimeError("cv2.imencode(.png, mono) failed")
+    bits = int(buf.size) * 8
+    dec = cv2.imdecode(buf, cv2.IMREAD_GRAYSCALE)       # HxW uint8
+    if dec is None:
+        raise RuntimeError("cv2.imdecode mono failed")
+    return to_float01_from_uint8(dec), bits
+
+
+def png_roundtrip_color(img_f01_bgr: np.ndarray, level: int = 6) -> Tuple[np.ndarray, int]:
+    """
+    PNG encode/decode for COLOR image in BGR float01.
+    Provided for completeness; not used when mode='flatten' (we use mono there).
+    """
+    assert img_f01_bgr.ndim == 3 and img_f01_bgr.shape[2] == 3, f"expected HxWx3, got {img_f01_bgr.shape}"
+    img_u8 = to_uint8_from_float01(img_f01_bgr)         # HxWx3 uint8 (BGR)
+    ok, buf = cv2.imencode(".png", img_u8, [cv2.IMWRITE_PNG_COMPRESSION, int(level)])
+    if not ok:
+        raise RuntimeError("cv2.imencode(.png, color) failed")
+    bits = int(buf.size) * 8
+    dec = cv2.imdecode(buf, cv2.IMREAD_COLOR)           # HxWx3 uint8 (BGR)
+    if dec is None:
+        raise RuntimeError("cv2.imdecode color failed")
+    return to_float01_from_uint8(dec), bits
+
+
 def sandwich_planes_to_rgb(
     x01: torch.Tensor,                            # [T,C,H,W] in [0,1]
     pre_unet: torch.nn.Module,                   # SmallUNet(C->3)
@@ -142,14 +196,16 @@ def unpack_rgb_to_planes(y_pad: torch.Tensor, C: int, orig_size: Tuple[int, int]
         blocks = [F.pixel_unshuffle(ch, 2) for ch in (r, g, b)]
         return torch.cat(blocks, dim=1)  # [T,12,H,W]
 
-    else:  # "flatten"
-        mono = y[:, :1]                      # [T,1,3H,4W]
+    elif mode == "flatten":
+        mono = y[:, :1]
         if H2 % r != 0 or W2 % c != 0:
-            raise ValueError(f"unpack(flatten): orig_size {(H2,W2)} not divisible by (3,4)")
-        H = H2 // r
-        W = W2 // c
+            raise ValueError(f"unpack(flatten): orig_size {(H2,W2)} not divisible by (r,c)=({r},{c})")
+        H = H2 // r; W = W2 // c
         x = rearrange(mono, 'T 1 (r H) (c W) -> T (r c) H W', r=r, c=c, H=H, W=W)
         return x
+
+    else:  # "flatten"
+        raise ValueError(f"unpack: unknown mode '{mode}'")
 
 
 # ======================== DENSITY (Dz=192) ========================

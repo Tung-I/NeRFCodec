@@ -3,10 +3,11 @@ dataset_name = blender
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego
 expname =  tensorste_lego_jpeg80
 basedir = ./log
+wandb_project = nerfcodec-ste-lego
 
+# === training ===
 n_iters = 60000
 batch_size = 4096
-
 N_voxel_init = 2097156 # 128**3
 N_voxel_final = 27000000 # 300**3
 upsamp_list = [2000,3000,4000,5500,7000]
@@ -18,8 +19,10 @@ shadingMode = MLP_Fea
 fea2denseAct = softplus
 view_pe = 2
 fea_pe = 2
-L1_weight_inital = 8e-5
-L1_weight_rest = 4e-5
+# L1_weight_inital = 8e-5
+# L1_weight_rest = 4e-5
+L1_weight_inital = 0
+L1_weight_rest = 0
 rm_weight_mask_thre = 1e-4
 
 N_vis = 5
@@ -27,18 +30,29 @@ vis_every = 10000
 save_every = 10000
 render_test = 1
 
+# === STE plane codec backend ===
+model_name = TensorSTE
+codec_backend = jpeg           # or png
+compression = 1
+compress_before_volrend = 1
 
-# switch to JPEG backend + TensorSTE
-model_name=TensorSTE
-codec_backend=jpeg
-compression=1
-compress_before_volrend=1
+# density stream
+den_packing_mode = flatten
+den_quant_mode   = global
+den_global_min   = -25.0
+den_global_max   =  25.0
+den_quality      = 80        # used if codec_backend=jpeg
+den_png_level    = -1         # used if codec_backend=png
+den_r = 4
+den_c = 4
 
-# JPEG config
-jpeg_quality=80
-jpeg_plane_packing_mode=flatten    
-jpeg_quant_mode=global
-jpeg_global_min=-20.0
-jpeg_global_max=20.0
-ste_enabled=1
+# appearance stream
+app_packing_mode = flatten
+app_quant_mode   = global
+app_global_min   = -5.0
+app_global_max   =  5.0
+app_quality      = 80
+app_png_level    = -1
+app_r = 6
+app_c = 8
 
