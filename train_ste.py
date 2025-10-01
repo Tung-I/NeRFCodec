@@ -33,19 +33,6 @@ renderer = OctreeRender_trilinear_fast   # keep identical for compatibility
 # Utilities
 # ======================================================================================
 
-def _load_optim_states_if_any(system, optimizer, aux_optimizer):
-    if ("optimizer" in system) and (system["optimizer"] is not None):
-        try:
-            optimizer.load_state_dict(system["optimizer"])
-        except Exception as e:
-            print(f"[resume] main optimizer state not loaded: {e}")
-    if ("aux_optimizer" in system) and (system["aux_optimizer"] is not None) and (aux_optimizer is not None):
-        try:
-            aux_optimizer.load_state_dict(system["aux_optimizer"])
-        except Exception as e:
-            print(f"[resume] aux optimizer state not loaded: {e}")
-    return system.get("global_step", 0)
-
 def _make_model_ckpt_dict(tensorf):
     kwargs = tensorf.get_kwargs()
     ckpt = {"kwargs": kwargs, "state_dict": tensorf.state_dict()}

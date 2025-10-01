@@ -17,6 +17,7 @@ from opt import config_parser
 from renderer import *
 from utils import *
 from dataLoader import dataset_dict
+from utils import maybe_align_cdf_and_load_system, load_optim_states_if_any, save_system_ckpt
 
 
 # ======================================================================================
@@ -31,77 +32,6 @@ renderer = OctreeRender_trilinear_fast   # keep identical for compatibility
 # Utilities
 # ======================================================================================
 
-def _maybe_align_cdf_and_load_system(tensorf, system_ckpt_path):
-    """Load a 'system' checkpoint (full model incl. codec), aligning entropy CDF shapes if needed."""
-    system = torch.load(system_ckpt_path, map_location=device, weights_only=False)
-
-    # Align CDF buffers before load (prevents size mismatch across compressai versions)
-    def _maybe_zero_like(dest_mod, key):
-        if key in system["state_dict"]:
-            src_sz = system["state_dict"][key].size()
-            try:
-                getattr_from = dict(tensorf.named_buffers())
-                cur = getattr_from[key]
-                if cur.size() != src_sz:
-                    # replace with zero buffer of src size so .load_state_dict works
-                    parts = key.split(".")
-                    mod = tensorf
-                    for p in parts[:-1]:
-                        mod = getattr(mod, p)
-                    setattr(mod, parts[-1], torch.zeros(src_sz, device=cur.device, dtype=cur.dtype))
-            except Exception:
-                pass
-
-    _maybe_zero_like(tensorf, "app_feat_codec.entropy_bottleneck._quantized_cdf")
-    _maybe_zero_like(tensorf, "den_feat_codec.entropy_bottleneck._quantized_cdf")
-
-    # Load everything (TensoRF + codec)
-    tensorf.load(system, strict=False)
-    return system
-
-
-def _load_optim_states_if_any(system, optimizer, aux_optimizer):
-    """Restore optimizer states if present."""
-    if ("optimizer" in system) and (system["optimizer"] is not None):
-        try:
-            optimizer.load_state_dict(system["optimizer"])
-        except Exception as e:
-            print(f"[resume] main optimizer state not loaded: {e}")
-    if ("aux_optimizer" in system) and (system["aux_optimizer"] is not None) and (aux_optimizer is not None):
-        try:
-            aux_optimizer.load_state_dict(system["aux_optimizer"])
-        except Exception as e:
-            print(f"[resume] aux optimizer state not loaded: {e}")
-    return system.get("global_step", 0)
-
-def _make_model_ckpt_dict(tensorf):
-    """Mirror tensorf.save(): pack model kwargs, state_dict, and alphaMask bundle."""
-    kwargs = tensorf.get_kwargs()
-    ckpt = {"kwargs": kwargs, "state_dict": tensorf.state_dict()}
-
-    if getattr(tensorf, "alphaMask", None) is not None:
-        alpha_volume = tensorf.alphaMask.alpha_volume.bool().cpu().numpy()
-        ckpt["alphaMask.shape"] = alpha_volume.shape
-        ckpt["alphaMask.mask"]  = np.packbits(alpha_volume.reshape(-1))
-        ckpt["alphaMask.aabb"]  = tensorf.alphaMask.aabb.cpu()
-    return ckpt
-
-def _save_system_ckpt(path, tensorf, optimizer, aux_optimizer, global_step, kwargs_override=None):
-    """
-    Save a resume-able checkpoint that still contains the same fields
-    tensorf.save() used to write (incl. alphaMask) PLUS optimizers & step.
-    """
-    base = _make_model_ckpt_dict(tensorf)
-
-    # Optionally override kwargs (e.g., when saving right after building from args)
-    if kwargs_override is not None:
-        base["kwargs"] = kwargs_override
-
-    base["optimizer"]     = optimizer.state_dict()     if optimizer     is not None else None
-    base["aux_optimizer"] = aux_optimizer.state_dict() if aux_optimizer is not None else None
-    base["global_step"]   = int(global_step)
-
-    torch.save(base, path)
 
 def set_seed(seed: int = 20211202):
     random.seed(seed)
@@ -211,6 +141,7 @@ def _build_model(args, aabb, reso_cur, near_far):
 
     # --------- FULL RESUME: load previous system ckpt (model+codec) ----------
     if getattr(args, "resume_system_ckpt", None):
+        assert args.ckpt is None, "When resuming from a full system checkpoint, do not set --ckpt."
         # Build a minimal skeleton first (same kwargs as the saved run)
         system_meta = torch.load(args.resume_system_ckpt, map_location=device, weights_only=False)
         kwargs = system_meta["kwargs"]; kwargs.update({"device": device})
@@ -231,7 +162,7 @@ def _build_model(args, aabb, reso_cur, near_far):
         )
 
         # Now load the entire system state (TensoRF + codec + priors)
-        _maybe_align_cdf_and_load_system(tensorf, args.resume_system_ckpt)
+        maybe_align_cdf_and_load_system(tensorf, args.resume_system_ckpt)
         tensorf.enable_vec_qat()
 
         return tensorf
@@ -412,7 +343,7 @@ def reconstruction(args):
         if getattr(args, "resume_optim", 0):
             system = torch.load(args.resume_system_ckpt, map_location=device, weights_only=False)
             start_iter = system.get("global_step", 0)
-            _load_optim_states_if_any(system, optimizer, aux_optimizer)
+            load_optim_states_if_any(system, optimizer, aux_optimizer)
 
     # how many more steps to run
     extra_iters = getattr(args, "extra_iters", 0) or args.n_iters
@@ -582,7 +513,7 @@ def reconstruction(args):
                 # Save a full system checkpoint for exact resumption of training
                 save_path = f"{logdir}/{args.expname}_system_{final_it}.th" if args.compression else f"{logdir}/{args.expname}.th"
                 kwargs = tensorf.get_kwargs()
-                _save_system_ckpt(save_path, tensorf, optimizer, aux_optimizer, final_it, kwargs)
+                save_system_ckpt(save_path, tensorf, optimizer, aux_optimizer, final_it, kwargs)
             else:
                 tensorf.save(f"{logdir}/{args.expname}.th")
 

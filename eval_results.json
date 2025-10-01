@@ -1,0 +1,38 @@
+{
+  "NeRFCodec": {
+    "PSNR": 34.75,
+    "size_planes": 0.052,
+    "size_codec": 1.828,
+    "size_renderer": 0.0275
+  },
+  "Ours-JPEG-Q80": {
+    "PSNR": 35.04,
+    "size_planes": 1.05,
+    "size_codec": 0,
+    "size_renderer": 0.0275
+  },
+  "Ours-JPEG-Q65": {
+    "PSNR": 34.35,
+    "size_planes": 0.76,
+    "size_codec": 0,
+    "size_renderer": 0.0275
+  },
+  "Ours-JPEG-Q50": {
+    "PSNR": 33.83,
+    "size_planes": 0.60,
+    "size_codec": 0,
+    "size_renderer": 0.0275
+  },
+  "Ours-JPEG-Q35": {
+    "PSNR": 33.25,
+    "size_planes": 0.47,
+    "size_codec": 0,
+    "size_renderer": 0.0275
+  },
+  "Ours-JPEG-Q20": {
+    "PSNR": 32.12,
+    "size_planes": 0.313,
+    "size_codec": 0,
+    "size_renderer": 0.0275
+  }
+}

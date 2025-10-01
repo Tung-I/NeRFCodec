@@ -1,7 +1,7 @@
 
-dataset_name = nsvf
-datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Wineholder
-expname =  tensorf_wineholder_VM
+dataset_name = tankstemple
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Ignatius
+expname =  tensorf_ignatius_VM
 basedir = ./log
 
 n_iters = 30000
@@ -26,9 +26,8 @@ fea2denseAct = softplus
 view_pe = 2
 fea_pe = 2
 
-L1_weight_inital = 8e-5
-L1_weight_rest = 4e-5
-rm_weight_mask_thre = 1e-4
+TV_weight_density = 0.1
+TV_weight_app = 0.01
 
 ## please uncomment following configuration if hope to training on cp model
 #model_name = TensorCP

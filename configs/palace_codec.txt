@@ -1,10 +1,10 @@
 
 dataset_name = nsvf
-datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Wineholder
-expname =  tensorf_wineholder_VM
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Palace
+expname =  tensorf_palace_VM_codec
 basedir = ./log
 
-n_iters = 30000
+n_iters = 100000
 batch_size = 4096
 
 N_voxel_init = 2097156 # 128**3
@@ -13,7 +13,7 @@ upsamp_list = [2000,3000,4000,5500,7000]
 update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
 
 N_vis = 5
-vis_every = 10000
+vis_every = 5000
 
 render_test = 1
 

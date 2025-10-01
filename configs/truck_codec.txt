@@ -1,10 +1,10 @@
 
 dataset_name = tankstemple
-datadir = ../../Dataset/TanksAndTemples/Truck
-expname =  tensorf_truck_VM
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Truck
+expname =  tensorf_truck_VM_codec
 basedir = ./log
 
-n_iters = 100000
+n_iters = 65000
 batch_size = 4096
 
 N_voxel_init = 2097156 # 128**3

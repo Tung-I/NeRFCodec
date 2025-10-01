@@ -34,7 +34,7 @@ def config_parser(cmd=None):
     group.add_argument("--app_c",            type=int,   default=8)
     
     ####
-    parser.add_argument('--resume_system_ckpt', action='store_true', default=False)
+    parser.add_argument('--resume_system_ckpt', type=str, default=None)
     parser.add_argument('--resume_optim', action='store_true', default=False)
     parser.add_argument('--extra_iters', type=int, default=0)
     parser.add_argument('--save_every', type=int, default=5000)

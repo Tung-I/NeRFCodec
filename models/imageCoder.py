@@ -308,7 +308,7 @@ class AdaptorCheng2020Anchor(Cheng2020Anchor):
         self.decoder_adaptor
         self.trunc_g_a
         self.trunc_g_s
-    What the receiver actually needs:
+    What the receiver actually needs (which are content specific):
         decoder_adaptor
         context_prediction
         entropy_parameters

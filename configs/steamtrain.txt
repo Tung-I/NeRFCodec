@@ -1,7 +1,7 @@
 
 dataset_name = nsvf
-datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Wineholder
-expname =  tensorf_wineholder_VM
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Steamtrain
+expname =  tensorf_steamtrain_VM
 basedir = ./log
 
 n_iters = 30000

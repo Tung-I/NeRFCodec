@@ -1,6 +1,6 @@
 
 dataset_name = tankstemple
-datadir = ../../Dataset/TanksAndTemples/Truck
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Truck
 expname =  tensorf_truck_VM
 basedir = ./log
 

@@ -411,9 +411,48 @@ class TensorVMSplit(TensorBase):
             out_net = feat_codec.forward(norm_plane_padded)
         else:
             out_enc = feat_codec.compress(norm_plane_padded)
+
+            # --- robust byte counter for nested lists/tuples of byte strings ---
+            def _count_bytes(obj):
+                try:
+                    import torch, numpy as np
+                except Exception:
+                    torch, np = None, None
+
+                # bytes-like
+                if isinstance(obj, (bytes, bytearray, memoryview)):
+                    return len(obj)
+
+                # nested containers
+                if isinstance(obj, (list, tuple)):
+                    return sum(_count_bytes(x) for x in obj)
+
+                # python str (some compressai builds return str for y_strings)
+                if isinstance(obj, str):
+                    # latin-1 preserves length 1:1 for 0..255
+                    try:
+                        return len(obj.encode("latin-1", errors="ignore"))
+                    except Exception:
+                        return len(obj)
+
+                # torch uint8 tensor
+                if torch is not None and torch.is_tensor(obj) and obj.dtype == torch.uint8:
+                    return int(obj.numel())
+
+                # numpy uint8 array
+                if (("np" in locals() and np is not None)
+                        and isinstance(obj, np.ndarray)
+                        and obj.dtype == np.uint8):
+                    return int(obj.size)
+
+                raise ValueError(f"Cannot count bytes of object type {type(obj)}")
+                return 0
+            
+            total_bytes = _count_bytes(out_enc["strings"])
+
             out_dec = feat_codec.decompress(out_enc["strings"], out_enc["shape"])
             out_net = out_dec
-            out_net.update({"strings_length": sum(len(s[0]) for s in out_enc["strings"])})
+            out_net["strings_length_bytes"] = int(total_bytes)
 
         # unpad + denorm
         out_net["x_hat"] = F.pad(out_net["x_hat"], unpad)
@@ -636,37 +675,79 @@ class TensorVMSplit(TensorBase):
         return_breakdown: bool = True # include per-module detail
     ):
         """
-        Estimate the number of bits the receiver must download to decode, accounting for:
-        - decoder_adaptor
-        - context_prediction
-        - entropy_parameters
-        - entropy_bottleneck.*quantiles (aux CDF params)
+        What we transmit to the client (decoder side only):
 
-        We account *both* density and appearance codecs.
+        Codec (both density & appearance):
+            - decoder_adaptor
+            - context_prediction
+            - entropy_parameters
+            - entropy_bottleneck.quantiles     (learned; receiver calls .update() to rebuild CDFs)
 
-        Modes:
-        - "raw":  exact bits = sum(param.numel() * param.element_size() * 8)
-        - "quant-ent": per-tensor uniform quantization to `q_bits`, plus ideal entropy-coded size:
-            bits ~= N * H(p) + header, where p is empirical PMF of the quantized values.
-            Header (if include_header):
-            - 2 float32 scalars (min,max) = 64 bits
-            - q_bits (uint8)              = 8 bits
-            - tensor shape (len(shape) int32) = 32 * len(shape)
-            You can tweak this header if you use a different container.
+        Neural renderer:
+            - basis_mat                        (feature fusion)
+            - renderModule                     (MLP head, e.g., MLPRender_Fea/PE)
 
-        Returns:
-        A dict with totals and (optionally) a per-module breakdown for both den/app codecs.
+        Frozen priors (e.g., trunc_g_s / h_s when fix_decoder_prior=True) and all encoder-side parts
+        are excluded by design.
+
+        Units: returns both bits and MB (MB = bytes / 1e6).
         """
 
-        assert mode in ("raw", "quant-ent"), "mode must be 'raw' or 'quant-ent'"
+        import math
+        import torch
 
-        def _collect_decode_side_tensors(codec):
-            """Pick exactly the parameters the receiver needs for decoding."""
+        assert mode in ("raw", "quant-ent"), "mode must be 'raw' or 'quant-ent'"
+        assert hasattr(self, "den_feat_codec") and hasattr(self, "app_feat_codec"), \
+            "Feature codecs are not initialized. Call init_feat_codec(...) first."
+
+        # ---------- per-tensor size models ----------
+        def _tensor_bits_raw(t: torch.Tensor) -> int:
+            return int(t.numel() * t.element_size() * 8)
+
+        def _tensor_bits_quant(t: torch.Tensor) -> float:
+            # Uniform quantize to q_bits, Shannon bound over empirical PMF + tiny header
+            x = t.detach().float().cpu()
+            N = x.numel()
+            if N == 0:
+                H_bits = 0.0
+            else:
+                xmin = float(torch.min(x))
+                xmax = float(torch.max(x))
+                if (not math.isfinite(xmin)) or (not math.isfinite(xmax)) or (xmax - xmin) <= 0:
+                    H_bits = 0.0
+                else:
+                    L = 2 ** q_bits
+                    scale = (xmax - xmin) / (L - 1)
+                    q = torch.round((x - xmin) / (scale if scale > 0 else 1.0)).clamp_(0, L - 1).to(torch.int64)
+                    hist = torch.bincount(q.view(-1), minlength=L).float()
+                    probs = hist / float(N)
+                    nz = probs > 0
+                    H = -(probs[nz] * torch.log2(probs[nz])).sum().item()
+                    H_bits = H * float(N)
+            header_bits = 0
+            if include_header:
+                header_bits += 32 * 2              # min,max as float32
+                header_bits += 8                   # q_bits as uint8
+                header_bits += 32 * len(t.shape)   # int32 per dim
+            return float(H_bits + header_bits)
+
+        def _list_bits_raw(tensors):   return sum(_tensor_bits_raw(p) for p in tensors)
+        def _list_bits_quant(tensors): return float(sum(_tensor_bits_quant(p) for p in tensors))
+
+        def _sum_group(tensors_by_name):
+            if mode == "raw":
+                bits = {k: _list_bits_raw(v)   for k, v in tensors_by_name.items()}
+            else:
+                bits = {k: _list_bits_quant(v) for k, v in tensors_by_name.items()}
+            total_bits = float(sum(bits.values()))
+            return bits, total_bits
+
+        # ---------- collect exactly the decode-side, learned parts ----------
+        def _collect_codec_parts(codec):
             parts = {
-                "decoder_adaptor":      list(codec.decoder_adaptor.parameters()) if hasattr(codec, "decoder_adaptor") else [],
-                "context_prediction":   list(codec.context_prediction.parameters()) if hasattr(codec, "context_prediction") else [],
-                "entropy_parameters":   list(codec.entropy_parameters.parameters()) if hasattr(codec, "entropy_parameters") else [],
-                # quantiles: find them by name (CompressAI exposes them as *.quantiles)
+                "decoder_adaptor":      list(codec.decoder_adaptor.parameters())     if hasattr(codec, "decoder_adaptor") else [],
+                "context_prediction":   list(codec.context_prediction.parameters())  if hasattr(codec, "context_prediction") else [],
+                "entropy_parameters":   list(codec.entropy_parameters.parameters())  if hasattr(codec, "entropy_parameters") else [],
                 "entropy_bottleneck.quantiles": []
             }
             for n, p in codec.named_parameters():
@@ -674,86 +755,54 @@ class TensorVMSplit(TensorBase):
                     parts["entropy_bottleneck.quantiles"].append(p)
             return parts
 
-        def _bits_raw(param_list):
-            bits = 0
-            for p in param_list:
-                bits += p.numel() * p.element_size() * 8
-            return bits
+        den_parts = _collect_codec_parts(self.den_feat_codec)
+        app_parts = _collect_codec_parts(self.app_feat_codec)
 
-        def _bits_quant_entropy(param_list):
-            """
-            Per-tensor uniform quantization to q_bits, then Shannon bound using empirical histogram.
-            Adds a small header per tensor if include_header=True.
-            """
-            total_bits = 0.0
-            for p in param_list:
-                t = p.detach().float().cpu()
-                N = t.numel()
-                if N == 0:
-                    continue
+        den_bits_by_mod, den_total_bits = _sum_group(den_parts)
+        app_bits_by_mod, app_total_bits = _sum_group(app_parts)
 
-                tmin = float(t.min())
-                tmax = float(t.max())
-                # degenerate constant tensor → zero entropy; still send header
-                if not math.isfinite(tmin) or not math.isfinite(tmax) or (tmax - tmin) == 0.0:
-                    H_bits = 0.0
-                else:
-                    L = 2 ** q_bits
-                    scale = (tmax - tmin) / (L - 1)
-                    # avoid division by zero if range is tiny
-                    if scale <= 0:
-                        H_bits = 0.0
-                    else:
-                        q = torch.round((t - tmin) / scale).clamp_(0, L - 1).to(torch.int64)
-                        hist = torch.bincount(q.view(-1), minlength=L).float()
-                        probs = hist / float(N)
-                        nz = probs > 0
-                        H = -(probs[nz] * torch.log2(probs[nz])).sum().item()  # bits/symbol
-                        H_bits = H * float(N)
+        # ---------- renderer payload (basis_mat + renderModule) ----------
+        renderer_parts = {
+            "basis_mat": list(self.basis_mat.parameters()) if hasattr(self, "basis_mat") else [],
+            "render_mlp": list(self.renderModule.parameters()) if isinstance(self.renderModule, torch.nn.Module) else [],
+        }
+        rend_bits_by_mod, rend_total_bits = _sum_group(renderer_parts)
 
-                header_bits = 0
-                if include_header:
-                    # 2 float32 (min,max) + 1 uint8 (q_bits) + shape ints
-                    header_bits += 32 * 2  # min/max as float32
-                    header_bits += 8       # q_bits as uint8
-                    header_bits += 32 * len(p.shape)  # shape as int32 per dim
+        grand_total_bits = den_total_bits + app_total_bits + rend_total_bits
 
-                total_bits += H_bits + header_bits
-            return float(total_bits)
-
-        def _sum_dict_of_lists(d):
-            """Sum bits for a dict[module_name] -> list[Parameter]."""
-            if mode == "raw":
-                return {k: _bits_raw(v) for k, v in d.items()}
-            else:
-                return {k: _bits_quant_entropy(v) for k, v in d.items()}
-
-        # ---------------- collect and compute for both codecs ---------------- #
-        assert hasattr(self, "den_feat_codec") and hasattr(self, "app_feat_codec"), \
-            "Feature codecs are not initialized. Call init_feat_codec(...) first."
-
-        den_parts = _collect_decode_side_tensors(self.den_feat_codec)
-        app_parts = _collect_decode_side_tensors(self.app_feat_codec)
-
-        den_bits_by_mod = _sum_dict_of_lists(den_parts)
-        app_bits_by_mod = _sum_dict_of_lists(app_parts)
-
-        den_total = sum(den_bits_by_mod.values())
-        app_total = sum(app_bits_by_mod.values())
+        # ---------- also report MB (decimal) ----------
+        def _bits_to_MB(bits: float) -> float:
+            return float(bits) / 8.0 / 1e6
 
         out = {
             "mode": mode,
             "q_bits": q_bits if mode == "quant-ent" else None,
             "include_header": include_header if mode == "quant-ent" else None,
-            "density_codec_bits": {
-                "total_bits": den_total,
-                **({"breakdown": den_bits_by_mod} if return_breakdown else {})
+
+            # Codec totals
+            "density_codec": {
+                "total_bits": den_total_bits,
+                "total_MB": _bits_to_MB(den_total_bits),
+                **({"breakdown_bits": den_bits_by_mod,
+                    "breakdown_MB": {k: _bits_to_MB(v) for k, v in den_bits_by_mod.items()}} if return_breakdown else {})
             },
-            "appearance_codec_bits": {
-                "total_bits": app_total,
-                **({"breakdown": app_bits_by_mod} if return_breakdown else {})
+            "appearance_codec": {
+                "total_bits": app_total_bits,
+                "total_MB": _bits_to_MB(app_total_bits),
+                **({"breakdown_bits": app_bits_by_mod,
+                    "breakdown_MB": {k: _bits_to_MB(v) for k, v in app_bits_by_mod.items()}} if return_breakdown else {})
             },
-            "total_bits_both_codecs": den_total + app_total,
+
+            # Renderer totals
+            "renderer": {
+                "total_bits": rend_total_bits,
+                "total_MB": _bits_to_MB(rend_total_bits),
+                **({"breakdown_bits": rend_bits_by_mod,
+                    "breakdown_MB": {k: _bits_to_MB(v) for k, v in rend_bits_by_mod.items()}} if return_breakdown else {})
+            },
+
+            # Grand total
+            "total_bits_all": grand_total_bits,
+            "total_MB_all": _bits_to_MB(grand_total_bits),
         }
         return out
-

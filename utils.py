@@ -12,6 +12,114 @@ mse2psnr = lambda x : -10. * torch.log(x) / torch.log(torch.Tensor([10.]))
 
 from compressai.optimizers import net_aux_optimizer
 
+def maybe_align_cdf_and_load_system(tensorf, system_ckpt_path):
+    """
+    Make sure all CompressAI decode-side buffers have the same shapes as the checkpoint
+    before loading. This avoids size-mismatch errors across versions / init states.
+    """
+    system = torch.load(system_ckpt_path, map_location=device, weights_only=False)
+    sd = system["state_dict"]
+
+    # All decode-side buffers that can differ in shape / start empty:
+    keys_to_fix = [
+        # entropy bottleneck (hyperprior)
+        "app_feat_codec.entropy_bottleneck._quantized_cdf",
+        "app_feat_codec.entropy_bottleneck._cdf_length",
+        "app_feat_codec.entropy_bottleneck._offset",
+        "den_feat_codec.entropy_bottleneck._quantized_cdf",
+        "den_feat_codec.entropy_bottleneck._cdf_length",
+        "den_feat_codec.entropy_bottleneck._offset",
+        # gaussian conditional (context+params)
+        "app_feat_codec.gaussian_conditional._quantized_cdf",
+        "app_feat_codec.gaussian_conditional._cdf_length",
+        "app_feat_codec.gaussian_conditional._offset",
+        "app_feat_codec.gaussian_conditional.scale_table",
+        "den_feat_codec.gaussian_conditional._quantized_cdf",
+        "den_feat_codec.gaussian_conditional._cdf_length",
+        "den_feat_codec.gaussian_conditional._offset",
+        "den_feat_codec.gaussian_conditional.scale_table",
+    ]
+
+    def _ensure_buffer_like(model, dotted_key, like_tensor):
+        """
+        Walk `model` along dotted_key (module path) and replace the *attribute* at the end
+        with a new tensor of the right shape/dtype/device so load_state_dict won't complain.
+        """
+        parts = dotted_key.split(".")
+        mod = model
+        for p in parts[:-1]:
+            mod = getattr(mod, p)
+        name = parts[-1]
+        # keep dtype/device to match current module, but fall back to checkpoint dtype
+        cur = getattr(mod, name, None)
+        dtype = (cur.dtype if torch.is_tensor(cur) else like_tensor.dtype)
+        dev   = (cur.device if torch.is_tensor(cur) else device)
+        new_t = torch.zeros_like(like_tensor).to(dev, dtype=dtype)
+        setattr(mod, name, new_t)
+
+    # Pre-size any buffer whose size differs (or is missing) using the ckpt’s tensor
+    for k in keys_to_fix:
+        if k in sd:
+            try:
+                _ensure_buffer_like(tensorf, k, sd[k])
+            except Exception:
+                # safe to ignore if the module isn't present in this config
+                pass
+
+    # Now load everything (TensoRF + codec)
+    tensorf.load(system)  # this calls load_state_dict(..., strict=False)
+
+    # Important: refresh entropy tables to match current device / version
+    if hasattr(tensorf, "app_feat_codec"):
+        tensorf.app_feat_codec.update(force=True)
+    if hasattr(tensorf, "den_feat_codec"):
+        tensorf.den_feat_codec.update(force=True)
+
+    return system
+
+def load_optim_states_if_any(system, optimizer, aux_optimizer):
+    """Restore optimizer states if present."""
+    if ("optimizer" in system) and (system["optimizer"] is not None):
+        try:
+            optimizer.load_state_dict(system["optimizer"])
+        except Exception as e:
+            print(f"[resume] main optimizer state not loaded: {e}")
+    if ("aux_optimizer" in system) and (system["aux_optimizer"] is not None) and (aux_optimizer is not None):
+        try:
+            aux_optimizer.load_state_dict(system["aux_optimizer"])
+        except Exception as e:
+            print(f"[resume] aux optimizer state not loaded: {e}")
+    return system.get("global_step", 0)
+
+def make_model_ckpt_dict(tensorf):
+    """Mirror tensorf.save(): pack model kwargs, state_dict, and alphaMask bundle."""
+    kwargs = tensorf.get_kwargs()
+    ckpt = {"kwargs": kwargs, "state_dict": tensorf.state_dict()}
+
+    if getattr(tensorf, "alphaMask", None) is not None:
+        alpha_volume = tensorf.alphaMask.alpha_volume.bool().cpu().numpy()
+        ckpt["alphaMask.shape"] = alpha_volume.shape
+        ckpt["alphaMask.mask"]  = np.packbits(alpha_volume.reshape(-1))
+        ckpt["alphaMask.aabb"]  = tensorf.alphaMask.aabb.cpu()
+    return ckpt
+
+def save_system_ckpt(path, tensorf, optimizer, aux_optimizer, global_step, kwargs_override=None):
+    """
+    Save a resume-able checkpoint that still contains the same fields
+    tensorf.save() used to write (incl. alphaMask) PLUS optimizers & step.
+    """
+    base = make_model_ckpt_dict(tensorf)
+
+    # Optionally override kwargs (e.g., when saving right after building from args)
+    if kwargs_override is not None:
+        base["kwargs"] = kwargs_override
+
+    base["optimizer"]     = optimizer.state_dict()     if optimizer     is not None else None
+    base["aux_optimizer"] = aux_optimizer.state_dict() if aux_optimizer is not None else None
+    base["global_step"]   = int(global_step)
+
+    torch.save(base, path)
+
 def configure_optimizers(net, args):
     """Separate parameters for the main optimizer and the auxiliary optimizer.
     Return two optimizers"""

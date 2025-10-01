@@ -16,6 +16,12 @@ from utils import cal_n_samples
 # ---------------------------------------------------------------------
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+"""
+Usage:
+- python eval.py         --dataset_name blender         --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego         --downsample_train 1         --compression --compression_strategy adaptor_feat_coding --compress_before_volrend         --system_ckpt log/lego_codec/version_002/lego_codec_system_64999.th         --ckpt        log/lego_codec/version_002/lego_codec_compression_64999.th --N_vis 5
+- python eval.py         --dataset_name blender         --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego         --downsample_train 1         --compression --compression_strategy adaptor_feat_coding --compress_before_volrend         --system_ckpt log/lego_codec_384/version_002/lego_codec_384_system_64999.th         --ckpt        log/lego_codec_384/version_002/lego_codec_384_compression_64999.th --N_vis 20
+
+"""
 
 def set_seed(seed: int = 20211202):
     import random
@@ -278,19 +284,22 @@ def run_eval(args):
         tensorf.mode = "eval"
 
         if args.compress_before_volrend:
-            # Important: run decode before rendering
             coding_output = tensorf.compress_with_external_codec(
                 tensorf.den_feat_codec, tensorf.app_feat_codec, mode="eval"
             )
-            # Basic check the streams are actually coded
             den_rate_list = coding_output["den"]["rec_likelihood"]
             app_rate_list = coding_output["app"]["rec_likelihood"]
-            den_bitstream_bytes = sum([p.get("strings_length", 0) for p in den_rate_list])
-            app_bitstream_bytes = sum([p.get("strings_length", 0) for p in app_rate_list])
 
-            # Debug stats to ensure decoded planes are sane
-            _print_plane_stats(tensorf, "after_decode")
-            _assert_nonempty_rec_planes(tensorf)
+            def _get_len_bytes(p):
+                # prefer new key; fallback to old key if present
+                if "strings_length_bytes" in p:
+                    return int(p["strings_length_bytes"])
+                if "strings_length" in p:  # legacy, assumed bytes
+                    return int(p["strings_length"])
+                return 0
+
+            den_bitstream_bytes = sum(_get_len_bytes(p) for p in den_rate_list)
+            app_bitstream_bytes = sum(_get_len_bytes(p) for p in app_rate_list)
 
         else:
             # Fallback: estimate via log-likelihoods
@@ -310,7 +319,7 @@ def run_eval(args):
         args,
         renderer,
         args.save_dir if args.save_dir else "./eval_outputs/",
-        N_vis=10,
+        N_vis=args.N_vis,
         N_samples=nSamples,
         white_bg=white_bg,
         ndc_ray=ndc_ray,
@@ -318,28 +327,45 @@ def run_eval(args):
     )
 
     # ---------------- Decoder-parameter bandwidth (optional) ----------------
-    decoder_bits_raw = None
-    decoder_bits_quant = None
-    quant_breakdown = None
-    raw_breakdown = None
+    decoder_payload_raw = None
+    decoder_payload_quant = None
+
     if args.compression and hasattr(tensorf, "estimate_codec_transmission_bits"):
+        # raw = exact dtype sizes; quant-ent = uniform q_bits + entropy bound (+ tiny per-tensor header)
         raw_report = tensorf.estimate_codec_transmission_bits(
             mode="raw", return_breakdown=True
         )
-        decoder_bits_raw = raw_report["total_bits_both_codecs"]
-        raw_breakdown = {
-            "density": raw_report["density_codec_bits"]["breakdown"],
-            "appearance": raw_report["appearance_codec_bits"]["breakdown"],
-        }
-
         quant_report = tensorf.estimate_codec_transmission_bits(
             mode="quant-ent", q_bits=args.q_bits_est, include_header=True, return_breakdown=True
         )
-        decoder_bits_quant = quant_report["total_bits_both_codecs"]
-        quant_breakdown = {
-            "density": quant_report["density_codec_bits"]["breakdown"],
-            "appearance": quant_report["appearance_codec_bits"]["breakdown"],
-        }
+
+        def _slim_report(rep: dict):
+            # Keep totals and breakdown (both bits and MB) for density/appearance codecs and renderer
+            return {
+                "density_codec": {
+                    "total_bits": float(rep["density_codec"]["total_bits"]),
+                    "total_MB": float(rep["density_codec"]["total_MB"]),
+                    "breakdown_bits": rep["density_codec"].get("breakdown_bits"),
+                    "breakdown_MB": rep["density_codec"].get("breakdown_MB"),
+                },
+                "appearance_codec": {
+                    "total_bits": float(rep["appearance_codec"]["total_bits"]),
+                    "total_MB": float(rep["appearance_codec"]["total_MB"]),
+                    "breakdown_bits": rep["appearance_codec"].get("breakdown_bits"),
+                    "breakdown_MB": rep["appearance_codec"].get("breakdown_MB"),
+                },
+                "renderer": {
+                    "total_bits": float(rep["renderer"]["total_bits"]),
+                    "total_MB": float(rep["renderer"]["total_MB"]),
+                    "breakdown_bits": rep["renderer"].get("breakdown_bits"),
+                    "breakdown_MB": rep["renderer"].get("breakdown_MB"),
+                },
+                "total_bits_all": float(rep["total_bits_all"]),
+                "total_MB_all": float(rep["total_MB_all"]),
+            }
+
+        decoder_payload_raw = _slim_report(raw_report)
+        decoder_payload_quant = _slim_report(quant_report)
 
     # ---------------- Print summary ----------------
     os.makedirs(args.save_dir, exist_ok=True)
@@ -354,11 +380,10 @@ def run_eval(args):
             "total": int(den_bitstream_bytes + app_bitstream_bytes),
             "total_MB": (den_bitstream_bytes + app_bitstream_bytes) * 1e-6,
         },
-        "decoder_side_overhead_bits": {
-            "raw_serialize_bits": float(decoder_bits_raw) if decoder_bits_raw is not None else None,
-            "quantized_entropy_bits@{}bit".format(args.q_bits_est): float(decoder_bits_quant) if decoder_bits_quant is not None else None,
-            "raw_breakdown": raw_breakdown,
-            "quant_breakdown": quant_breakdown,
+        # Decoder-side (what the client must download to decode & render)
+        "decoder_renderer_payload": {
+            "raw": decoder_payload_raw,  # exact bytes from dtype sizes
+            f"quant_ent@{args.q_bits_est}bit": decoder_payload_quant,  # entropy-coded estimate
         },
     }
     print("\n===== Evaluation Summary =====")
@@ -380,6 +405,7 @@ def build_argparser():
     p.add_argument("--datadir", type=str, required=True)
     p.add_argument("--downsample_train", type=float, default=1.0)
     p.add_argument("--ndc_ray", type=int, default=0)
+    p.add_argument("--N_vis", type=int, default=5, help='N images to vis')
 
     # Model name used in your project
     p.add_argument("--model_name", type=str, default="TensorVMSplit")

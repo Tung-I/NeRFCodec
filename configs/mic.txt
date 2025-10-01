@@ -1,6 +1,6 @@
 
 dataset_name = blender
-datadir = ../../Dataset/Synthetic-NeRF(nerf)/mic
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/mic
 expname =  tensorf_mic_VM
 basedir = ./log
 
@@ -10,7 +10,8 @@ batch_size = 4096
 N_voxel_init = 2097156 # 128**3
 N_voxel_final = 27000000 # 300**3
 upsamp_list = [2000,3000,4000,5500,7000]
-update_AlphaMask_list = [2000,4000]
+update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
+# update_AlphaMask_list = [2000,4000]
 
 N_vis = 5
 vis_every = 10000
@@ -31,11 +32,3 @@ fea_pe = 2
 L1_weight_inital = 8e-5
 L1_weight_rest = 4e-5
 rm_weight_mask_thre = 1e-4
-
-## please uncomment following configuration if hope to training on cp model
-#model_name = TensorCP
-#n_lamb_sigma = [96]
-#n_lamb_sh = [288]
-#N_voxel_final = 125000000 # 500**3
-#L1_weight_inital = 1e-5
-#L1_weight_rest = 1e-5
