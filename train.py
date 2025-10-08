@@ -10,7 +10,8 @@ import math
 import numpy as np
 
 import torch
-from torch.utils.tensorboard import SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
+import wandb
 from tqdm.auto import tqdm
 
 from opt import config_parser
@@ -32,6 +33,17 @@ renderer = OctreeRender_trilinear_fast   # keep identical for compatibility
 # Utilities
 # ======================================================================================
 
+def _wandb_init(args, logdir):
+    project = getattr(args, "wandb_project", "nerfcodec-adaptor")
+    run_name = getattr(args, "wandb_run_name", args.expname)
+    mode = getattr(args, "wandb_mode", "online")  # or "offline"
+    wandb.init(
+        project=project,
+        name=run_name,
+        dir=logdir,
+        mode=mode,
+        config=vars(args),
+    )
 
 def set_seed(seed: int = 20211202):
     random.seed(seed)
@@ -90,7 +102,7 @@ def _rate_from_likelihoods(likelihood_list):
     return rate
 
 
-def _codec_warmup_if_needed(tensorf, args, writer, logdir):
+def _codec_warmup_if_needed(tensorf, args, logdir):
     if not args.warm_up:
         return
     if args.warm_up_ckpt != "":
@@ -117,7 +129,6 @@ def _codec_warmup_if_needed(tensorf, args, writer, logdir):
         opt.zero_grad()
         loss.backward()
         opt.step()
-        writer.add_scalar("warm_up/feat_rec_loss", loss, global_step=it)
 
         if it == args.warm_up_iters:
             torch.save(tensorf.den_feat_codec.state_dict(), f"{logdir}/den_feat_codec_{it}.pth")
@@ -285,9 +296,10 @@ def reconstruction(args):
     print(f"[logdir] {logdir}")
     os.makedirs(logdir, exist_ok=True)
     os.makedirs(f"{logdir}/imgs_vis", exist_ok=True)
-    writer = SummaryWriter(logdir)
     with open(f"{logdir}/train_cfg.json", "w") as f:
         json.dump(vars(args), f)
+
+    _wandb_init(args, logdir)
 
     # -------------------- model --------------------
     aabb = train_dataset.scene_bbox.to(device)
@@ -319,7 +331,7 @@ def reconstruction(args):
     if getattr(args, "resume_system_ckpt", None):
         print("[resume] Skipping warm-up; using codec from resume checkpoint.")
     else:
-        _codec_warmup_if_needed(tensorf, args, writer, logdir)
+        _codec_warmup_if_needed(tensorf, args, logdir)
 
     # -------------------- rays & sampler --------------------
     torch.cuda.empty_cache()
@@ -351,6 +363,11 @@ def reconstruction(args):
     print(f"[resume] starting at iter={start_iter}, running to {end_iter}")
 
     pbar = tqdm(range(args.n_iters), miniters=args.progress_refresh_rate, file=sys.stdout)
+
+    def _psnr_from_mse(mse_val):
+        return -10.0 * np.log(mse_val) / np.log(10.0)
+    train_psnrs_since_vis = []
+
     for it in pbar:
         final_it = it
         ray_idx = sampler.nextids()
@@ -385,40 +402,43 @@ def reconstruction(args):
             den_rate = _rate_from_likelihoods(den_like)
             app_rate = _rate_from_likelihoods(app_like)
             rate_loss = args.den_rate_weight * den_rate + args.app_rate_weight * app_rate
-            writer.add_scalar("train/density_rate_loss", den_rate, global_step=it)
-            writer.add_scalar("train/app_rate_loss", app_rate, global_step=it)
-            writer.add_scalar("train/rate_loss", rate_loss, global_step=it)
         else:
             rate_loss = 0.0
 
         # reconstruction loss + regs
         mse = torch.mean((rgb_map - rgb_train) ** 2)
         loss = mse
-
+        loss_reg_val = 0.0; loss_l1_val = 0.0
+        reg_tv_density_val = 0.0; reg_tv_app_val = 0.0
+        
         if Ortho_w > 0:
             loss_reg = tensorf.vector_comp_diffs()
             loss += Ortho_w * loss_reg
-            writer.add_scalar("train/reg", loss_reg.detach().item(), global_step=it)
+            loss_reg_val = float(loss_reg.detach().item())
+            
         if L1_w > 0:
             loss_l1 = tensorf.density_L1()
             loss += L1_w * loss_l1
-            writer.add_scalar("train/reg_l1", loss_l1.detach().item(), global_step=it)
+            loss_l1_val = float(loss_l1.detach().item())
+
         if TV_w_d > 0:
             TV_w_d *= lr_factor
-            loss_tv = tensorf.TV_loss_density(tvreg) * TV_w_d
-            loss += loss_tv
-            writer.add_scalar("train/reg_tv_density", loss_tv.detach().item(), global_step=it)
+            loss_tv_d = tensorf.TV_loss_density(tvreg) * TV_w_d
+            loss += loss_tv_d
+            reg_tv_density_val = float(loss_tv_d.detach().item())
+
         if TV_w_a > 0:
             TV_w_a *= lr_factor
-            loss_tv = tensorf.TV_loss_app(tvreg) * TV_w_a
-            loss += loss_tv
-            writer.add_scalar("train/reg_tv_app", loss_tv.detach().item(), global_step=it)
+            loss_tv_a = tensorf.TV_loss_app(tvreg) * TV_w_a
+            loss += loss_tv_a
+            reg_tv_app_val = float(loss_tv_a.detach().item())
+
         if args.compression and args.rate_penalty:
             loss = loss + rate_loss * 1e-9
+
         if getattr(args, "feat_rec_loss", 0):
             feat_rec = features_rec_loss(tensorf, coding_output)
             loss += 1e-2 * feat_rec
-            writer.add_scalar("train/feat_rec_loss", feat_rec, global_step=it)
 
         optimizer.zero_grad()
         loss.backward()
@@ -430,16 +450,29 @@ def reconstruction(args):
             aux_loss = tensorf.get_aux_loss()
             aux_loss.backward()
             aux_optimizer.step()
-            writer.add_scalar("train/aux_loss", aux_loss, global_step=it)
+
+        mse_val = float(mse.detach().item())
+        train_psnr = float(_psnr_from_mse(mse_val))
+        train_psnrs_since_vis.append(train_psnr)
+
+        # log per-iter train metrics
+        log_dict = {
+            "iter": int(it),
+            "train/psnr": train_psnr,
+            "train/rate_loss": float(rate_loss) if isinstance(rate_loss, torch.Tensor) else float(rate_loss),
+        }
+        if loss_reg_val is not None:       log_dict["train/loss_reg"] = loss_reg_val
+        if loss_l1_val is not None:        log_dict["train/loss_l1"] = loss_l1_val
+        if reg_tv_density_val is not None: log_dict["train/reg_tv_density"] = reg_tv_density_val
+        if reg_tv_app_val is not None:     log_dict["train/reg_tv_app"] = reg_tv_app_val
+        wandb.log(log_dict, step=it)
+
 
         # metrics & lr decay logging
-        PSNRs.append(-10.0 * np.log(mse.detach().item()) / np.log(10.0))
-        writer.add_scalar("train/PSNR", PSNRs[-1], global_step=it)
-        writer.add_scalar("train/mse", mse.detach().item(), global_step=it)
         for g in optimizer.param_groups:
             g["lr"] = g["lr"] * lr_factor
-            writer.add_scalar("lr", g["lr"], global_step=it)
 
+        PSNRs.append(-10.0 * np.log(mse.detach().item()) / np.log(10.0))
         if it % args.progress_refresh_rate == 0:
             pbar.set_description(
                 f"it {it:05d} | train_psnr {np.mean(PSNRs):.2f} | test_psnr {np.mean(PSNRs_test):.2f} | mse {mse:.6f}"
@@ -450,7 +483,6 @@ def reconstruction(args):
         if it % args.vis_every == args.vis_every - 1 and args.N_vis != 0:
             if args.compression:
                 with torch.no_grad():
-                    # freeze/update priors for fair evaluation
                     tensorf.den_feat_codec.update(force=True)
                     tensorf.app_feat_codec.update(force=True)
                     tensorf.den_feat_codec.eval()
@@ -464,7 +496,7 @@ def reconstruction(args):
                         N_vis=args.N_vis, prtx=f"compress{it:06d}_", N_samples=nSamples,
                         white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
                     )
-                    writer.add_scalar("test/psnr_compress", np.mean(PSNRs_test), global_step=it)
+                    wandb.log({"test/psnr": float(np.mean(PSNRs_test)), "iter": int(it)}, step=it)
                     tensorf.den_feat_codec.train(); tensorf.app_feat_codec.train()
             else:
                 PSNRs_test = evaluation(
@@ -472,7 +504,12 @@ def reconstruction(args):
                     N_vis=args.N_vis, prtx=f"{it:06d}_", N_samples=nSamples,
                     white_bg=white_bg, ndc_ray=ndc_ray, compute_extra_metrics=False,
                 )
-                writer.add_scalar("test/psnr", np.mean(PSNRs_test), global_step=it)
+                wandb.log({"test/psnr": float(np.mean(PSNRs_test)), "iter": int(it)}, step=it)
+
+            # (optional) also log mean train psnr since last vis
+            if len(train_psnrs_since_vis) > 0:
+                wandb.log({"train/psnr@vis": float(np.mean(train_psnrs_since_vis)), "iter": int(it)}, step=it)
+                train_psnrs_since_vis.clear()
 
         # AlphaMask update / upsample schedules
         if it in update_AlphaMask_list:
@@ -534,9 +571,9 @@ def reconstruction(args):
                 print(f"====> Final bitstream size: {(den_rate+app_rate)*1e-6:0.4f} MB")
         PSNRs_test = evaluation(
             test_dataset, tensorf, args, renderer, f"{logdir}/imgs_test_all/",
-            N_vis=-1, N_samples=10, white_bg=white_bg, ndc_ray=ndc_ray, device=device,
+            N_vis=-1, N_samples=5, white_bg=white_bg, ndc_ray=ndc_ray, device=device,
         )
-        SummaryWriter(logdir).add_scalar("test/psnr_all", np.mean(PSNRs_test), global_step=final_it)
+        wandb.log({"test/psnr_final": float(np.mean(PSNRs_test)), "iter": int(final_it)}, step=final_it)
         print(f"======> {args.expname} test all psnr: {np.mean(PSNRs_test)} <======")
 
     # (optional) train-set render on pretrain path if you keep render_train=1 in your cfg

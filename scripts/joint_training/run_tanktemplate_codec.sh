@@ -71,3 +71,6 @@ python train.py --add_exp_version 1 --expname caterpillar_codec \
                 --save_every 5000 --vis_every 5000 \
                 --warm_up_ckpt log/caterpillar_codec/version_000 \
                 --downsample_train 2
+
+######################################################3
+

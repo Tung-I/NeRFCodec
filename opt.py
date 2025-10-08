@@ -13,6 +13,18 @@ def config_parser(cmd=None):
     group.add_argument("--align", type=int, default=64)
     group.add_argument("--ste_enabled", type=int, default=1)
 
+    # --- Codec-noise pilot (disabled by default) ---
+    group.add_argument("--codec_noise", action="store_true",
+                    help="Replace codec with deterministic noise (pilot ablation).")
+    group.add_argument("--codec_noise_mode", type=str, default="uniform_q",
+                    choices=["quant","gaussian","blocky", "codec_block"],
+                    help="Type of noise operator.")
+    group.add_argument("--codec_noise_level", type=float, default=None,
+                    help="Noise intensity: bits for uniform_q; sigma% of dynamic range for gaussian/uniform; block size for blocky.")
+    group.add_argument("--codec_noise_seed", type=int, default=12345,
+                    help="Base seed for deterministic noise.")
+
+
     # density config
     group.add_argument("--den_packing_mode", type=str, default="flatten")
     group.add_argument("--den_quant_mode",   type=str, default="global", choices=["global", "per_channel"])

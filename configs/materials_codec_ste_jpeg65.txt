@@ -1,12 +1,11 @@
 
 dataset_name = blender
-datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego
-expname =  tensorste_lego_jpeg80_l11e5
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/materials
+expname =  tensorste_materials_jpeg65
 basedir = ./log
-wandb_project = nerfcodec-ste-lego
 
 # === training ===
-n_iters = 60000
+n_iters = 20000
 batch_size = 4096
 N_voxel_init = 2097156 # 128**3
 N_voxel_final = 27000000 # 300**3
@@ -22,10 +21,7 @@ fea_pe = 2
 L1_weight_inital = 1e-5
 L1_weight_rest = 1e-5
 rm_weight_mask_thre = 1e-4
-
 N_vis = 5
-vis_every = 10000
-save_every = 10000
 render_test = 1
 
 # === STE plane codec backend ===
@@ -39,7 +35,7 @@ den_packing_mode = flatten
 den_quant_mode   = global
 den_global_min   = -25.0
 den_global_max   =  25.0
-den_quality      = 80        # used if codec_backend=jpeg
+den_quality      = 65        # used if codec_backend=jpeg
 den_png_level    = -1         # used if codec_backend=png
 den_r = 4
 den_c = 4
@@ -49,8 +45,7 @@ app_packing_mode = flatten
 app_quant_mode   = global
 app_global_min   = -5.0
 app_global_max   =  5.0
-app_quality      = 80
+app_quality      = 65
 app_png_level    = -1
 app_r = 6
 app_c = 8
-

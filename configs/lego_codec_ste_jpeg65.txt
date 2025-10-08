@@ -3,10 +3,9 @@ dataset_name = blender
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego
 expname =  tensorste_lego_jpeg65
 basedir = ./log
-wandb_project = nerfcodec-ste-lego
 
 # === training ===
-n_iters = 60000
+n_iters = 20000
 batch_size = 4096
 N_voxel_init = 2097156 # 128**3
 N_voxel_final = 27000000 # 300**3
@@ -19,15 +18,10 @@ shadingMode = MLP_Fea
 fea2denseAct = softplus
 view_pe = 2
 fea_pe = 2
-# L1_weight_inital = 8e-5
-# L1_weight_rest = 4e-5
 L1_weight_inital = 0
 L1_weight_rest = 0
 rm_weight_mask_thre = 1e-4
-
 N_vis = 5
-vis_every = 10000
-save_every = 10000
 render_test = 1
 
 # === STE plane codec backend ===

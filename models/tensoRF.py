@@ -549,7 +549,16 @@ class TensorVMSplit(TensorBase):
         for i in range(len(self.density_plane)):
             # choose plane source: reconstructed or raw learnable
             if self.compression and (self.compress_before_volrend or self.using_external_codec):
-                plane_src = self.den_rec_plane[i]
+                if self._noise_enabled():
+                    plane_src = self._noise_op(
+                        self.density_plane[i], 
+                        self.noise_cfg["mode"], 
+                        self.noise_cfg["level"], 
+                        self.noise_cfg["seed"], 
+                        plane_idx=i
+                    )
+                else:
+                    plane_src = self.den_rec_plane[i]
             else:
                 plane_src = self.map_fn(self.density_plane[i])
 
@@ -602,7 +611,16 @@ class TensorVMSplit(TensorBase):
         plane_coef_point, line_coef_point = [], []
         for i in range(len(self.app_plane)):
             if self.compression and (self.compress_before_volrend or self.using_external_codec):
-                plane_src = self.app_rec_plane[i]
+                if self._noise_enabled():
+                    plane_src = self._noise_op(
+                        torch.tanh(self.app_plane[i]),
+                        self.noise_cfg["mode"],
+                        self.noise_cfg["level"],
+                        self.noise_cfg["seed"],
+                        plane_idx=100 + i  # different stream
+                    )
+                else:
+                    plane_src = self.app_rec_plane[i]
             else:
                 plane_src = self.map_fn(self.app_plane[i])
 
@@ -806,3 +824,187 @@ class TensorVMSplit(TensorBase):
             "total_MB_all": _bits_to_MB(grand_total_bits),
         }
         return out
+    
+    # In class TensorVMSplit -----------------------------------------------
+
+    def _ste(self, x, fwd):
+        """
+        Straight-through wrapper: forward uses fwd(x) (non-diff),
+        backward is identity wrt x.
+        """
+        with torch.no_grad():
+            y = fwd(x)
+        return x + (y - x).detach()
+    
+    def _noise_op(self, plane, mode, level, seed, plane_idx):
+        """
+        Deterministic noise operator under STE.
+
+        Modes:
+        - "quant"    : uniform quant/dequant within FIXED global range
+        - "gaussian" : additive N(0, sigma% * FIXED range), clamp to FIXED range
+        - "blocky"   : depthwise box blur (k×k), then uniform quant within FIXED range
+
+        Fixed global ranges (STE+JPEG style):
+        density planes (plane_idx < 100):  [-25, 25]
+        appearance planes (plane_idx >=100): [-5, 5]
+
+        Levels (int): 1=light, 2=medium, 3=heavy (clamped to [1,3])
+        """
+        dev   = plane.device
+        dtype = plane.dtype
+
+        # clamp level
+        try:
+            lvl = int(level)
+        except Exception:
+            lvl = 1
+        lvl = 1 if lvl < 1 else (3 if lvl > 3 else lvl)
+
+        # per-device generator, deterministic per (seed, plane_idx) for gaussian
+        g = torch.Generator(device=dev.type)
+        g.manual_seed(int(seed) ^ (int(plane_idx) * 0x9e3779b1))
+
+        # -------- fixed global ranges ----------
+        is_app   = (int(plane_idx) >= 100)
+        rng_lo   = -5.0 if is_app else -25.0
+        rng_hi   =  5.0 if is_app else  25.0
+        rng_span = (rng_hi - rng_lo)  # 10 or 50
+
+        # ---------------- QUANT ----------------
+        if mode == "quant":
+            # 1/2/3 → 8 / 4 / 2 bits
+            bits = {1: 8, 2: 4, 3: 2}[lvl]
+            L    = 2 ** bits
+
+            def _q(x):
+                with torch.no_grad():
+                    # normalize to [0,1] by FIXED global range
+                    xn = (x - rng_lo) / (rng_span + 1e-8)
+                    xn = xn.clamp(0.0, 1.0)
+                    q  = torch.round(xn * (L - 1)) / (L - 1)
+                    y  = q * rng_span + rng_lo
+                return y
+
+            return self._ste(plane, _q)
+
+        # --------------- GAUSSIAN ---------------
+        elif mode == "gaussian":
+            # 1/2/3 → sigma_pct = 2% / 5% / 10% of the FIXED range
+            sigma = {1: 0.05, 2: 0.10, 3: 0.20}[lvl] * rng_span
+
+            def _add(x):
+                with torch.no_grad():
+                    noise = torch.normal(
+                        mean=0.0, std=1.0, size=x.shape, generator=g, device=dev, dtype=dtype
+                    ) * sigma
+                    y = (x + noise).clamp(rng_lo, rng_hi)
+                return y
+
+            return self._ste(plane, _add)
+
+        # ---------------- BLOCKY ----------------
+        elif mode == "blocky":
+            # lowpass_q: blur + uniform quant (all in FIXED range)
+            # 1: k=3,  q=6 bits   | 2: k=5, q=4 bits   | 3: k=9, q=3 bits
+            k, q_bits = {1: (3, 8), 2: (5, 8), 3: (7, 6)}[lvl]
+            k = max(1, min(k, plane.shape[-2], plane.shape[-1]))
+            L = 2 ** q_bits
+
+            kernel = torch.ones(1, 1, k, k, device=dev, dtype=dtype) / float(k * k)
+
+            def _lpq(x):
+                with torch.no_grad():
+                    # depthwise blur
+                    C = x.shape[1]
+                    x_blur = torch.nn.functional.conv2d(
+                        x, kernel.expand(C, 1, k, k), padding=k // 2, groups=C
+                    )
+                    # quantize in FIXED global range
+                    xn = (x_blur - rng_lo) / (rng_span + 1e-8)
+                    xn = xn.clamp(0.0, 1.0)
+                    q  = torch.round(xn * (L - 1)) / (L - 1)
+                    y  = q * rng_span + rng_lo
+                return y
+
+            return self._ste(plane, _lpq)
+
+                # ---------------- CODEC_BLOCK ----------------
+        elif mode == "codec_block":
+            # block-average -> fixed-range quant on block DC -> NN upsample
+            # 1/2/3 → (k, q_bits) = (4,8) / (8,6) / (16,4)
+            k, q_bits = {1: (2, 8), 2: (4, 6), 3: (8, 4)}[lvl]
+            # keep k valid for small planes
+            k = max(1, min(k, plane.shape[-2], plane.shape[-1]))
+            if k <= 1:
+                return plane
+
+            L = 2 ** q_bits
+
+            def _codec_block(x):
+                with torch.no_grad():
+                    # (1) non-overlapping block-average
+                    pooled = torch.nn.functional.avg_pool2d(
+                        x, kernel_size=k, stride=k, ceil_mode=False
+                    )
+                    # (2) quantize pooled values in FIXED global range
+                    xn = (pooled - rng_lo) / (rng_span + 1e-8)
+                    xn = xn.clamp(0.0, 1.0)
+                    q  = torch.round(xn * (L - 1)) / (L - 1)
+                    pooled_q = q * rng_span + rng_lo
+                    # (3) upsample back with NN (keeps block edges sharp)
+                    up = torch.nn.functional.interpolate(
+                        pooled_q, size=x.shape[-2:], mode="nearest"
+                    )
+                    return up
+
+            return self._ste(plane, _codec_block)
+
+
+        # fallback
+        return plane
+
+
+    def _noise_enabled(self):
+        return bool(getattr(self, "noise_cfg", {"enabled": False}).get("enabled", False))
+
+    # def compress_with_noise(self, mode="train"):
+    #     """
+    #     Mirror compress_with_external_codec but apply deterministic noise instead of a codec.
+    #     Writes self.den_rec_plane / self.app_rec_plane and returns a matching dict.
+    #     """
+    #     assert getattr(self, "noise_cfg", {"enabled": False})["enabled"], \
+    #         "compress_with_noise called but noise_cfg is disabled."
+
+    #     self._release_noise_cache()
+
+    #     self.map_fn = torch.nn.Tanh()  # match your app path; density uses Identity later
+
+    #     cfg = self.noise_cfg
+    #     mode_ = cfg["mode"]; lvl = cfg["level"]; seed = cfg["seed"]
+
+    #     # density planes (use Identity like your compute_densityfeature)
+    #     self.den_rec_plane, self.den_likelihood = [], []
+    #     for i in range(len(self.density_plane)):
+    #         src = self.density_plane[i]  # leave unbounded; match compute_densityfeature
+    #         rec = self._noise_op(src, mode_, lvl, seed, plane_idx=i)
+    #         self.den_rec_plane.append(rec)
+    #         # Minimal, rate-less placeholder to keep trainer happy
+    #         self.den_likelihood.append({"likelihoods": {"y": torch.ones(1, device=src.device),
+    #                                                     "z": torch.ones(1, device=src.device)},
+    #                                     "strings_length_bytes": 0})
+
+    #     # appearance planes (tanh like your normal path)
+    #     self.app_rec_plane, self.app_likelihood = [], []
+    #     for i in range(len(self.app_plane)):
+    #         src = torch.tanh(self.app_plane[i])
+    #         rec = self._noise_op(src, mode_, lvl, seed, plane_idx=100 + i)  # different seed stream
+    #         self.app_rec_plane.append(rec)
+    #         self.app_likelihood.append({"likelihoods": {"y": torch.ones(1, device=src.device),
+    #                                                     "z": torch.ones(1, device=src.device)},
+    #                                     "strings_length_bytes": 0})
+
+    #     return {
+    #         "den": {"rec_planes": self.den_rec_plane, "rec_likelihood": self.den_likelihood},
+    #         "app": {"rec_planes": self.app_rec_plane, "rec_likelihood": self.app_likelihood},
+    #     }

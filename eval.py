@@ -6,6 +6,7 @@ import argparse
 import numpy as np
 import torch
 from tqdm.auto import tqdm
+from pathlib import Path
 
 from renderer import OctreeRender_trilinear_fast as renderer
 from dataLoader import dataset_dict
@@ -18,8 +19,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 """
 Usage:
-- python eval.py         --dataset_name blender         --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego         --downsample_train 1         --compression --compression_strategy adaptor_feat_coding --compress_before_volrend         --system_ckpt log/lego_codec/version_002/lego_codec_system_64999.th         --ckpt        log/lego_codec/version_002/lego_codec_compression_64999.th --N_vis 5
-- python eval.py         --dataset_name blender         --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego         --downsample_train 1         --compression --compression_strategy adaptor_feat_coding --compress_before_volrend         --system_ckpt log/lego_codec_384/version_002/lego_codec_384_system_64999.th         --ckpt        log/lego_codec_384/version_002/lego_codec_384_compression_64999.th --N_vis 20
+python eval.py  \
+    --dataset_name blender \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 20 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
+    --system_ckpt log_2/nerf_chair/chair_codec_system_34999.th \
+    --ckpt log_2/nerf_chair/chair_codec_compression_64999.th 
+
+- python eval.py --dataset_name blender --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego --downsample_train 1 --compression --compression_strategy adaptor_feat_coding --compress_before_volrend --system_ckpt log/lego_codec_384/version_002/lego_codec_384_system_64999.th --ckpt log/lego_codec_384/version_002/lego_codec_384_compression_64999.th --N_vis 20
 
 """
 
@@ -312,13 +320,14 @@ def run_eval(args):
     # ---------------- PSNR on test set ----------------
     # Use a reasonable number of samples: if you passed a tiny value like 10, upgrade
     nSamples = tensorf.nSamples
-
+    # if ckpt dir is log_2/nerf_chair/chair_codec_system_34999.th, save_dir = log_2/nerf_chair/eval_outputs/
+    save_dir = str(Path(args.ckpt).parent / "eval_outputs")
     PSNRs_test = evaluation(
         test_dataset,
         tensorf,
         args,
         renderer,
-        args.save_dir if args.save_dir else "./eval_outputs/",
+        save_dir,
         N_vis=args.N_vis,
         N_samples=nSamples,
         white_bg=white_bg,
@@ -368,7 +377,7 @@ def run_eval(args):
         decoder_payload_quant = _slim_report(quant_report)
 
     # ---------------- Print summary ----------------
-    os.makedirs(args.save_dir, exist_ok=True)
+    os.makedirs(save_dir, exist_ok=True)
     summary = {
         "ckpt": args.ckpt,
         "system_ckpt": getattr(args, "system_ckpt", ""),
@@ -389,7 +398,7 @@ def run_eval(args):
     print("\n===== Evaluation Summary =====")
     print(json.dumps(summary, indent=2))
 
-    with open(os.path.join(args.save_dir, "eval_summary.json"), "w") as f:
+    with open(os.path.join(save_dir, "eval_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
 
@@ -425,9 +434,6 @@ def build_argparser():
     p.add_argument("--decode_from_latent_code", action="store_true", default=False)
     p.add_argument("--additional_vec", action="store_true", default=False)
     p.add_argument("--shadingMode", type=str, default="MLP_Fea")
-
-    # Output
-    p.add_argument("--save_dir", type=str, default="./eval_outputs/")
 
     # Overhead estimation
     p.add_argument("--q_bits_est", type=int, default=8, help="q_bits used in quant-ent overhead estimate")
