@@ -18,8 +18,7 @@ from opt import config_parser
 from renderer import *
 from utils import *
 from dataLoader import dataset_dict
-# CHANGED: import PlanesCfg (QP-capable) instead of JPEGPlanesCfg
-from models.tensorSTE import TensorSTE, PlanesCfg
+from models.tensorSTE import TensorSTE, JPEGPlanesCfg
 
 
 # ======================================================================================
@@ -85,7 +84,7 @@ def _build_log_dir(args) -> str:
         root = f"{args.basedir}/{args.expname}"
         os.makedirs(root, exist_ok=True)
         versions = sorted(glob.glob(f"{root}/version_*"))
-        idx = 0 if not versions else (int(versions[-1].split('_')[-1]) + 1)
+        idx = 0 if not versions else (int(versions[-1].split("_")[-1]) + 1)
         return f"{root}/version_{idx:03d}"
     return f"{args.basedir}/{args.expname}"
 
@@ -98,52 +97,32 @@ def _derive_schedule_lists(args):
         updateA = [100001]
     return upsamp, updateA
 
-
 # ======================================================================================
 # Model build
 # ======================================================================================
 
-# CHANGED: build generalized PlanesCfg with QP params for video codecs
-def _build_planescfg_from_args(args) -> PlanesCfg:
-    return PlanesCfg(
-        align=getattr(args, "align", 32),
-        codec=str(getattr(args, "codec_backend", "jpeg")).lower(),
-        vid_pix_fmt=str(getattr(args, "vid_pix_fmt", "yuv420p")),
-
+def _build_jpegste_cfg_from_args(args) -> JPEGPlanesCfg:
+    return JPEGPlanesCfg(
+        align=args.align,
+        codec=args.codec_backend,                         # 'jpeg' or 'png'
         # density
         den_packing_mode=args.den_packing_mode,
         den_quant_mode=args.den_quant_mode,
         den_global_range=(args.den_global_min, args.den_global_max),
+        den_quality=args.den_quality,
+        den_png_level=args.den_png_level,
         den_r=args.den_r, den_c=args.den_c,
-        den_quality=getattr(args, "den_quality", 80),
-        den_png_level=getattr(args, "den_png_level", 6),
-        den_hevc_qp=getattr(args, "den_hevc_qp", 32),
-        den_hevc_preset=str(getattr(args, "den_hevc_preset", "medium")),
-        den_av1_qp=getattr(args, "den_av1_qp", 36),
-        den_av1_speed=getattr(args, "den_av1_speed", 6),
-        den_vp9_qp=getattr(args, "den_vp9_qp", 40),
-        den_vp9_speed=getattr(args, "den_vp9_speed", 4),
-
         # appearance
         app_packing_mode=args.app_packing_mode,
         app_quant_mode=args.app_quant_mode,
         app_global_range=(args.app_global_min, args.app_global_max),
+        app_quality=args.app_quality,
+        app_png_level=args.app_png_level,
         app_r=args.app_r, app_c=args.app_c,
-        app_quality=getattr(args, "app_quality", 80),
-        app_png_level=getattr(args, "app_png_level", 6),
-        app_hevc_qp=getattr(args, "app_hevc_qp", 32),
-        app_hevc_preset=str(getattr(args, "app_hevc_preset", "medium")),
-        app_av1_qp=getattr(args, "app_av1_qp", 36),
-        app_av1_speed=getattr(args, "app_av1_speed", 6),
-        app_vp9_qp=getattr(args, "app_vp9_qp", 40),
-        app_vp9_speed=getattr(args, "app_vp9_speed", 4),
     )
 
-
 def _build_model(args, aabb, reso_cur, near_far):
-    # CHANGED: enable TensorSTE for jpeg/png/hevc/av1/vp9
-    using_tensorste = (str(getattr(args, "codec_backend", "jpeg")).lower()
-                       in ("jpeg", "png", "hevc", "av1", "vp9"))
+    using_tensorste = (getattr(args, "codec_backend", "jpeg") in ("jpeg", "png"))
     Model = TensorSTE if using_tensorste else eval(args.model_name)
 
     # --------- resume (pretrained TensoRF -> finetune) ----------
@@ -159,9 +138,9 @@ def _build_model(args, aabb, reso_cur, near_far):
         tensorf.load(ckpt)
 
         if using_tensorste:
-            cfg = _build_planescfg_from_args(args)
+            cfg = _build_jpegste_cfg_from_args(args)
             tensorf.init_ste(cfg)
-            tensorf.set_ste(bool(getattr(args, "ste_enabled", 1)))
+            tensorf.set_ste(bool(args.ste_enabled))
             tensorf.enable_vec_qat()
         else:
             raise Exception("Legacy adaptor path disabled in this script.")
@@ -184,9 +163,9 @@ def _build_model(args, aabb, reso_cur, near_far):
     )
 
     if using_tensorste:
-        cfg = _build_planescfg_from_args(args)
+        cfg = _build_jpegste_cfg_from_args(args)
         tensorf.init_ste(cfg)
-        tensorf.set_ste(bool(getattr(args, "ste_enabled", 1)))
+        tensorf.set_ste(bool(args.ste_enabled))
         tensorf.enable_vec_qat()
     else:
         raise Exception("Legacy adaptor path disabled in this script.")
@@ -198,15 +177,15 @@ def _configure_optimizers(tensorf, args):
         grad_vars = tensorf.get_optparam_groups(args.lr_init, args.lr_basis)
         return torch.optim.Adam(grad_vars, betas=(0.9, 0.99)), None
 
-    # STE path: optimize only TensoRF (plus optional extras)
-    if not getattr(args, "resume_finetune", 0):
+    # STE/JPEG/PNG: optimize only TensoRF (plus optional extras)
+    if not args.resume_finetune:
         grad_vars = tensorf.get_optparam_groups(
             lr_init_spatialxyz=2e-3, lr_init_network=1e-4, fix_plane=args.fix_triplane
         )
     else:
         grad_vars = tensorf.get_optparam_groups(lr_init_spatialxyz=2e-3, lr_init_network=0)
 
-    if getattr(args, "additional_vec", 0):
+    if args.additional_vec:
         grad_vars += tensorf.get_additional_optparam_groups(lr_init_spatialxyz=2e-3)
 
     main_opt = torch.optim.Adam(grad_vars, betas=(0.9, 0.99))
@@ -280,7 +259,6 @@ def reconstruction(args):
     # Regularizer weights
     Ortho_w = args.Ortho_weight
     L1_w    = args.L1_weight_inital
-    L1_w_app = args.L1_weight_app
     TV_w_d, TV_w_a = args.TV_weight_density, args.TV_weight_app
     tvreg = TVLoss()
 
@@ -337,10 +315,6 @@ def reconstruction(args):
             loss_l1 = tensorf.density_L1()
             loss += L1_w * loss_l1
             wandb.log({"train/reg_l1": float(loss_l1)}, step=it)
-        if L1_w_app > 0:
-            loss_l1_app = tensorf.app_L1()
-            loss += L1_w_app * loss_l1_app
-            wandb.log({"train/reg_l1_app": float(loss_l1_app)}, step=it)
         if TV_w_d > 0:
             TV_w_d *= lr_factor
             loss_tv = tensorf.TV_loss_density(tvreg) * TV_w_d
@@ -460,7 +434,6 @@ def reconstruction(args):
             train_eval, tensorf, args, renderer, f"{logdir}/imgs_train_all/",
             N_vis=-1, N_samples=-1, white_bg=white_bg, ndc_ray=ndc_ray, device=device
         )
-
 
 # ======================================================================================
 # Main

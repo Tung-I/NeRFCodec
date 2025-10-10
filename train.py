@@ -343,6 +343,7 @@ def reconstruction(args):
     # Regularizer weights
     Ortho_w = args.Ortho_weight
     L1_w    = args.L1_weight_inital
+    L1_w_app = args.L1_weight_app
     TV_w_d, TV_w_a = args.TV_weight_density, args.TV_weight_app
     tvreg = TVLoss()
 
@@ -421,6 +422,11 @@ def reconstruction(args):
             loss += L1_w * loss_l1
             loss_l1_val = float(loss_l1.detach().item())
 
+        if L1_w_app > 0:
+            loss_l1_app = tensorf.app_L1()
+            loss += L1_w_app * loss_l1_app
+            loss_appl1_val = float(loss_l1_app.detach().item())
+
         if TV_w_d > 0:
             TV_w_d *= lr_factor
             loss_tv_d = tensorf.TV_loss_density(tvreg) * TV_w_d
@@ -463,6 +469,7 @@ def reconstruction(args):
         }
         if loss_reg_val is not None:       log_dict["train/loss_reg"] = loss_reg_val
         if loss_l1_val is not None:        log_dict["train/loss_l1"] = loss_l1_val
+        if loss_appl1_val is not None:     log_dict["train/loss_appl1"] = loss_appl1_val
         if reg_tv_density_val is not None: log_dict["train/reg_tv_density"] = reg_tv_density_val
         if reg_tv_app_val is not None:     log_dict["train/reg_tv_app"] = reg_tv_app_val
         wandb.log(log_dict, step=it)

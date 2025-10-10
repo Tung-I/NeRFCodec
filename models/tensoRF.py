@@ -671,6 +671,13 @@ class TensorVMSplit(TensorBase):
             total += torch.mean(torch.abs(self.density_plane[i])) + torch.mean(torch.abs(self.density_line[i]))
         return total
 
+    def app_L1(self):
+        """L1 penalty over density planes and lines (used during early training)."""
+        total = 0
+        for i in range(len(self.app_plane)):
+            total += torch.mean(torch.abs(self.app_plane[i])) + torch.mean(torch.abs(self.app_line[i]))
+        return total
+
     def TV_loss_density(self, reg):
         """Total variation on density planes (called with scaling in trainer)."""
         total = 0

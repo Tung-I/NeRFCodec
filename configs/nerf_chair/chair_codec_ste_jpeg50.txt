@@ -1,7 +1,6 @@
-
 dataset_name = blender
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair
-expname =  tensorste_chair_jpeg50
+expname =  ste_chair_jpeg50
 basedir = ./log
 
 # === training ===

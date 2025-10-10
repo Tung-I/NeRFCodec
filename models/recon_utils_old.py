@@ -1,216 +1,146 @@
-# --- add these imports near the top of recon_utils.py ---
-import av
-import io
-from fractions import Fraction
-from typing import List
-import numpy as np
+# lib/plane_codec_dcvc.py  (new file)
 import torch
+from einops import rearrange
+import numpy as np
+import torch.nn.functional as F
 import math
 import cv2
-import torch.nn.functional as F
 from typing import Tuple, Optional
-from einops import rearrange
-
-# (No filesystem, no subprocess: in-memory encode/decode via PyAV)
+import subprocess, shutil
 
 DCVC_ALIGN = 32
-# =========================
-# Core PyAV round-trip util
-# =========================
-def _pyav_roundtrip_bgr_one(
+
+# ---------------------------------------------------------------------
+# FFmpeg via pipes: rawvideo in (BGR24), encoded bytes out; then decode
+# ---------------------------------------------------------------------
+def _ensure_ffmpeg():
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("FFmpeg not found in PATH. Install ffmpeg or add it to PATH.")
+
+def _ffmpeg_pipe_encode_decode_bgr(
     bgr_f01_hw3: np.ndarray,
-    *,
-    encoder: str,          # "libx265" | "libaom-av1" | "libvpx-vp9"
-    container: str,        # "hevc" | "ivf" | "webm"
-    pix_fmt: str,          # "yuv444p", "yuv444p", ...
-    fps: int = 25,
-    gop: int = 1,
-    options: dict | None = None,
+    enc_args: list,    # codec-specific args, e.g. ["-c:v","libx265","-x265-params","qp=32",...]
+    container: str,    # e.g. "hevc", "ivf", "webm"
 ) -> tuple[np.ndarray, int]:
     """
-    Encode one frame (BGR float[0,1]) -> bytes (in-memory container) -> decode back.
+    Encode one frame with FFmpeg (pipes, no filesystem), then decode it back.
     Returns: (decoded_bgr_f01, encoded_bits)
-    - Always treats input as RGB24 for the encoder (as requested),
-      and converts to the target pix_fmt via frame.reformat(...).
     """
+    _ensure_ffmpeg()
     assert bgr_f01_hw3.ndim == 3 and bgr_f01_hw3.shape[2] == 3, f"Expected HxWx3, got {bgr_f01_hw3.shape}"
     H, W = int(bgr_f01_hw3.shape[0]), int(bgr_f01_hw3.shape[1])
 
-    # ---------- ENCODE ----------
-    # BGR -> RGB uint8 for VideoFrame('rgb24')
-    rgb_u8 = np.ascontiguousarray(np.clip(np.round(bgr_f01_hw3[..., ::-1] * 255.0), 0, 255).astype(np.uint8))
+    # Prepare raw BGR bytes (stdin to encoder)
+    bgr_u8 = to_uint8_from_float01(bgr_f01_hw3)
+    raw_bytes = bgr_u8.tobytes()
 
-    # in-memory container buffer
-    out_buf = io.BytesIO()
-    oc = av.open(out_buf, mode="w", format=container)
+    # ---------------- encode to bytes ----------------
+    cmd_enc = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-f", "rawvideo", "-pix_fmt", "bgr24", "-s", f"{W}x{H}", "-i", "pipe:0",
+        *enc_args,
+        "-frames:v", "1",  # single frame
+        "-f", container, "pipe:1",
+    ]
+    enc_proc = subprocess.run(cmd_enc, input=raw_bytes, stdout=subprocess.PIPE, check=True)
+    encoded_bytes = enc_proc.stdout
+    bits = len(encoded_bytes) * 8
 
-    stream = oc.add_stream(encoder, rate=fps)
-    stream.width = W
-    stream.height = H
-    stream.time_base = Fraction(1, fps)
-    stream.codec_context.time_base = Fraction(1, fps)
-    stream.gop_size = int(gop)
-    stream.pix_fmt = pix_fmt
+    # ---------------- decode from bytes ----------------
+    cmd_dec = [
+        "ffmpeg", "-y", "-loglevel", "error",
+        "-i", "pipe:0",
+        "-f", "rawvideo", "-pix_fmt", "bgr24",
+        "-vframes", "1",
+        "pipe:1",
+    ]
+    dec_proc = subprocess.run(cmd_dec, input=encoded_bytes, stdout=subprocess.PIPE, check=True)
+    dec_raw = dec_proc.stdout
+    # Reinterpret raw bytes into HxWx3 BGR
+    if len(dec_raw) != H * W * 3:
+        raise RuntimeError(f"Decoded size mismatch: got {len(dec_raw)} bytes, expected {H*W*3}")
+    dec_bgr = np.frombuffer(dec_raw, dtype=np.uint8).reshape(H, W, 3)
+    dec_f01_bgr = to_float01_from_uint8(dec_bgr)
+    return dec_f01_bgr, bits
 
-    # codec options (map directly to AVCodecContext AVOptions)
-    if options:
-        for k, v in options.items():
-            # PyAV expects strings for options
-            stream.codec_context.options[str(k)] = str(v)
-
-    # Build VideoFrame in rgb24, then convert to requested pix_fmt
-    frame = av.VideoFrame.from_ndarray(rgb_u8, format="rgb24")
-    frame = frame.reformat(format=pix_fmt)
-
-    for packet in stream.encode(frame):
-        oc.mux(packet)
-    # flush
-    for packet in stream.encode(None):
-        oc.mux(packet)
-    oc.close()
-
-    bitstream = out_buf.getvalue()
-    bits = len(bitstream) * 8
-
-    # ---------- DECODE ----------
-    in_buf = io.BytesIO(bitstream)
-    ic = av.open(in_buf, mode="r", format=container)
-    rec_frames: List[np.ndarray] = []
-    for frm in ic.decode(video=0):
-        # Always convert decoder output back to RGB24 for uniformity
-        rgb = frm.to_ndarray(format="rgb24")   # HxWx3 uint8
-        rec_frames.append(rgb)
-        break  # single frame
-    ic.close()
-
-    if not rec_frames:
-        raise RuntimeError("PyAV decode produced no frame.")
-    dec_rgb_u8 = rec_frames[0]
-    if dec_rgb_u8.shape[0] != H or dec_rgb_u8.shape[1] != W:
-        raise RuntimeError(f"Roundtrip size mismatch: in ({H},{W}) vs out {dec_rgb_u8.shape[:2]}")
-
-    # RGB -> BGR float[0,1]
-    dec_bgr_f01 = (dec_rgb_u8[..., ::-1].astype(np.float32)) / 255.0
-    return dec_bgr_f01, bits
-
-
-# =======================================
-# HEVC (H.265 / libx265) — constant QP
-# =======================================
+# -------------------- HEVC (H.265, libx265 QP) --------------------
 def hevc_roundtrip_color(
     img_f01_bgr: np.ndarray,
     qp: int = 32,
     preset: str = "medium",
-    pix_fmt: str = "yuv444p",
+    pix_fmt: str = "yuv420p",
 ) -> tuple[np.ndarray, int]:
-    """
-    Single-frame HEVC in raw Annex-B stream ("hevc" container).
-    We set repeat-headers so decoding from raw stream is reliable.
-    """
-    # Force VPS/SPS/PPS in stream + fixed GOP to simplify raw decoding
-    x265_params = f"repeat-headers=1:keyint=1:min-keyint=1:scenecut=0:qp={int(qp)}"
-    opts = {
-        "end-usage": "q",         # <- force QP mode
-        "preset": str(preset),
-        "x265-params": x265_params,
-    }
-    return _pyav_roundtrip_bgr_one(
-        img_f01_bgr,
-        encoder="libx265",
-        container="hevc",
-        pix_fmt=pix_fmt,
-        fps=25,
-        gop=1,
-        options=opts,
-    )
+    enc_args = [
+        "-c:v", "libx265",
+        "-x265-params", f"qp={int(qp)}",
+        "-preset", str(preset),
+        "-pix_fmt", str(pix_fmt),
+    ]
+    return _ffmpeg_pipe_encode_decode_bgr(img_f01_bgr, enc_args, "hevc")
 
 def hevc_roundtrip_mono(
     img_f01: np.ndarray,
     qp: int = 32,
     preset: str = "medium",
-    pix_fmt: str = "yuv444p",
+    pix_fmt: str = "yuv420p",
 ) -> tuple[np.ndarray, int]:
-    bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)  # HxWx3
+    bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)
     bgr_dec, bits = hevc_roundtrip_color(bgr, qp=qp, preset=preset, pix_fmt=pix_fmt)
-    return bgr_dec[..., 0], bits   # return mono
+    # make it 2D mono again
+    return bgr_dec[..., 0], bits
 
-
-# =======================================
-# AV1 (libaom-av1) — constant QP
-# =======================================
+# -------------------- AV1 (libaom-av1 QP) --------------------
+# QP range: 0..63 (lower = higher quality)
 def av1_roundtrip_color(
     img_f01_bgr: np.ndarray,
     qp: int = 36,
     cpu_used: int = 6,
-    pix_fmt: str = "yuv444p",
+    pix_fmt: str = "yuv420p",
 ) -> tuple[np.ndarray, int]:
-    """
-    Single-frame AV1 in IVF. Force constant QP via end-usage=q + qp.
-    """
-    opts = {
-        "end-usage": "q",     # <- force QP mode (otherwise CRF/CQ is used)
-        "qp": int(qp),
-        "cpu-used": int(cpu_used),
-        "row-mt": 1,
-    }
-    return _pyav_roundtrip_bgr_one(
-        img_f01_bgr,
-        encoder="libaom-av1",
-        container="ivf",
-        pix_fmt=pix_fmt,
-        fps=25,
-        gop=1,
-        options=opts,
-    )
+    enc_args = [
+        "-c:v", "libaom-av1",
+        "-b:v", "0",
+        "-qp", str(int(qp)),
+        "-cpu-used", str(int(cpu_used)),
+        "-row-mt", "1",
+        "-pix_fmt", str(pix_fmt),
+    ]
+    return _ffmpeg_pipe_encode_decode_bgr(img_f01_bgr, enc_args, "ivf")
 
 def av1_roundtrip_mono(
     img_f01: np.ndarray,
     qp: int = 36,
     cpu_used: int = 6,
-    pix_fmt: str = "yuv444p",
+    pix_fmt: str = "yuv420p",
 ) -> tuple[np.ndarray, int]:
     bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)
     bgr_dec, bits = av1_roundtrip_color(bgr, qp=qp, cpu_used=cpu_used, pix_fmt=pix_fmt)
     return bgr_dec[..., 0], bits
 
-# =======================================
-# VP9 (libvpx-vp9) — constant QP
-# =======================================
+# -------------------- VP9 (libvpx-vp9 constant-QP via qmin=qmax) --------------------
+# QP range: 0..63 (lower = higher quality)
 def vp9_roundtrip_color(
     img_f01_bgr: np.ndarray,
     qp: int = 40,
     cpu_used: int = 4,
-    pix_fmt: str = "yuv444p",
+    pix_fmt: str = "yuv420p",
 ) -> tuple[np.ndarray, int]:
-    """
-    Single-frame VP9 in WEBM. Force constant QP:
-      - end-usage=q  (QP mode)
-      - qmin=qmax=qp
-      - crf=qp       (keeps internal CQ check happy on some builds)
-    """
-    opts = {
-        "end-usage": "q",         # <- force QP mode
-        "qmin": int(qp),
-        "qmax": int(qp),
-        "crf":  int(qp),          # <- avoids "CQ level must be between ..." errors
-        "cpu-used": int(cpu_used),
-        "row-mt": 1,
-    }
-    return _pyav_roundtrip_bgr_one(
-        img_f01_bgr,
-        encoder="libvpx-vp9",
-        container="webm",
-        pix_fmt=pix_fmt,
-        fps=25,
-        gop=1,
-        options=opts,
-    )
+    enc_args = [
+        "-c:v", "libvpx-vp9",
+        "-b:v", "0",
+        "-qmin", str(int(qp)),
+        "-qmax", str(int(qp)),
+        "-cpu-used", str(int(cpu_used)),
+        "-row-mt", "1",
+        "-pix_fmt", str(pix_fmt),
+    ]
+    return _ffmpeg_pipe_encode_decode_bgr(img_f01_bgr, enc_args, "webm")
 
 def vp9_roundtrip_mono(
     img_f01: np.ndarray,
     qp: int = 40,
     cpu_used: int = 4,
-    pix_fmt: str = "yuv444p",
+    pix_fmt: str = "yuv420p",
 ) -> tuple[np.ndarray, int]:
     bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)
     bgr_dec, bits = vp9_roundtrip_color(bgr, qp=qp, cpu_used=cpu_used, pix_fmt=pix_fmt)

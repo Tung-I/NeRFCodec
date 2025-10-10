@@ -2,48 +2,112 @@ import configargparse
 
 def config_parser(cmd=None):
     parser = configargparse.ArgumentParser()
-    ####
-     # ----------------- logging -----------------
+
+    # ----------------- logging -----------------
     parser.add_argument("--wandb_project", type=str, default="nerfcodec-ste")
     parser.add_argument("--wandb_off", type=int, default=0)  # 1 to disable (offline)
 
     # ----------------- STE codec backend -----------------
     group = parser.add_argument_group("ste_codec")
-    group.add_argument("--codec_backend", type=str, default="jpeg", choices=["jpeg", "png"])  # TensorSTE backends
-    group.add_argument("--align", type=int, default=64)
-    group.add_argument("--ste_enabled", type=int, default=1)
+    group.add_argument(
+        "--codec_backend",
+        type=str,
+        default="jpeg",
+        choices=["jpeg", "png", "hevc", "av1", "vp9"],
+        help="Codec used for STE plane round-trip."
+    )
+    group.add_argument("--align", type=int, default=32, help="Pad image canvas to multiples of this.")
+    group.add_argument("--ste_enabled", type=int, default=1, help="Toggle STE on/off.")
 
-    # --- Codec-noise pilot (disabled by default) ---
+    # Pixel format for video codecs (hevc/av1/vp9). yuv420p is compatible & fastest.
+    group.add_argument(
+        "--vid_pix_fmt",
+        type=str,
+        default="yuv420p",
+        choices=["yuv420p", "yuv422p", "yuv444p"],
+        help="Chroma subsampling for video codecs."
+    )
+
+    # --- Codec-noise pilot (unchanged) ---
     group.add_argument("--codec_noise", action="store_true",
-                    help="Replace codec with deterministic noise (pilot ablation).")
+        help="Replace codec with deterministic noise (pilot ablation).")
     group.add_argument("--codec_noise_mode", type=str, default="uniform_q",
-                    choices=["quant","gaussian","blocky", "codec_block"],
-                    help="Type of noise operator.")
+        choices=["quant", "gaussian", "blocky", "codec_block"],
+        help="Type of noise operator.")
     group.add_argument("--codec_noise_level", type=float, default=None,
-                    help="Noise intensity: bits for uniform_q; sigma% of dynamic range for gaussian/uniform; block size for blocky.")
+        help="Noise intensity: bits for uniform_q; sigma%% of dynamic range for gaussian/uniform; block size for blocky.")
     group.add_argument("--codec_noise_seed", type=int, default=12345,
-                    help="Base seed for deterministic noise.")
+        help="Base seed for deterministic noise.")
 
-
-    # density config
-    group.add_argument("--den_packing_mode", type=str, default="flatten")
+    # ----------------- density config -----------------
+    group.add_argument("--den_packing_mode", type=str, default="flatten",
+                       help="flatten | mosaic | flat4 (if supported by your packer).")
     group.add_argument("--den_quant_mode",   type=str, default="global", choices=["global", "per_channel"])
     group.add_argument("--den_global_min",   type=float, default=-25.0)
     group.add_argument("--den_global_max",   type=float, default= 25.0)
-    group.add_argument("--den_quality",      type=int,   default=None)   # used if codec=jpeg
-    group.add_argument("--den_png_level",    type=int,   default=None)    # used if codec=png (0..9)
     group.add_argument("--den_r",            type=int,   default=4)
     group.add_argument("--den_c",            type=int,   default=4)
 
-    # appearance config
-    group.add_argument("--app_packing_mode", type=str, default="flatten")
+    # JPEG/PNG (still supported)
+    group.add_argument("--den_quality",      type=int,   default=None,
+                       help="JPEG quality (if codec_backend=jpeg).")
+    group.add_argument("--den_png_level",    type=int,   default=None,
+                       help="PNG compression level 0..9 (if codec_backend=png).")
+
+    # HEVC (x265) — QP + preset
+    group.add_argument("--den_hevc_qp",      type=int,   default=32,
+                       help="HEVC (x265) QP [0..51], lower=better quality.")
+    group.add_argument("--den_hevc_preset",  type=str,   default="medium",
+                       choices=["ultrafast", "superfast", "veryfast", "faster", "fast",
+                                "medium", "slow", "slower", "veryslow", "placebo"],
+                       help="HEVC encoding preset (speed/quality trade-off).")
+
+    # AV1 (libaom)
+    group.add_argument("--den_av1_qp",       type=int,   default=36,
+                       help="AV1 QP [0..63], lower=better quality.")
+    group.add_argument("--den_av1_speed",    type=int,   default=6,
+                       help="AV1 cpu-used (encoder speed) ~ 4..8; higher=faster/larger.")
+
+    # VP9 (libvpx-vp9)
+    group.add_argument("--den_vp9_qp",       type=int,   default=40,
+                       help="VP9 QP [0..63], lower=better quality.")
+    group.add_argument("--den_vp9_speed",    type=int,   default=4,
+                       help="VP9 cpu-used 2..8; higher=faster/larger.")
+
+    # ----------------- appearance config -----------------
+    group.add_argument("--app_packing_mode", type=str, default="flatten",
+                       help="flatten | mosaic | flat4 (if supported by your packer).")
     group.add_argument("--app_quant_mode",   type=str, default="global", choices=["global", "per_channel"])
     group.add_argument("--app_global_min",   type=float, default=-5.0)
     group.add_argument("--app_global_max",   type=float, default= 5.0)
-    group.add_argument("--app_quality",      type=int,   default=None)   # jpeg
-    group.add_argument("--app_png_level",    type=int,   default=None)    # png
     group.add_argument("--app_r",            type=int,   default=6)
     group.add_argument("--app_c",            type=int,   default=8)
+
+    # JPEG/PNG (still supported)
+    group.add_argument("--app_quality",      type=int,   default=None,
+                       help="JPEG quality (if codec_backend=jpeg).")
+    group.add_argument("--app_png_level",    type=int,   default=None,
+                       help="PNG compression level 0..9 (if codec_backend=png).")
+
+    # HEVC (x265)
+    group.add_argument("--app_hevc_qp",      type=int,   default=32,
+                       help="HEVC (x265) QP [0..51], lower=better quality.")
+    group.add_argument("--app_hevc_preset",  type=str,   default="medium",
+                       choices=["ultrafast", "superfast", "veryfast", "faster", "fast",
+                                "medium", "slow", "slower", "veryslow", "placebo"],
+                       help="HEVC encoding preset (speed/quality trade-off).")
+
+    # AV1 (libaom)
+    group.add_argument("--app_av1_qp",       type=int,   default=36,
+                       help="AV1 QP [0..63], lower=better quality.")
+    group.add_argument("--app_av1_speed",    type=int,   default=6,
+                       help="AV1 cpu-used (encoder speed) ~ 4..8; higher=faster/larger.")
+
+    # VP9 (libvpx-vp9)
+    group.add_argument("--app_vp9_qp",       type=int,   default=40,
+                       help="VP9 QP [0..63], lower=better quality.")
+    group.add_argument("--app_vp9_speed",    type=int,   default=4,
+                       help="VP9 cpu-used 2..8; higher=faster/larger.")
     
     ####
     parser.add_argument('--resume_system_ckpt', type=str, default=None)
@@ -97,6 +161,7 @@ def config_parser(cmd=None):
     # loss
     parser.add_argument("--L1_weight_inital", type=float, default=0.0,
                         help='loss weight')
+    parser.add_argument("--L1_weight_app", type=float, default=0, help='loss weight')
     parser.add_argument("--L1_weight_rest", type=float, default=0,
                         help='loss weight')
     parser.add_argument("--Ortho_weight", type=float, default=0.0,

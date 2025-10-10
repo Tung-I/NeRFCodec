@@ -11,59 +11,89 @@ from .recon_utils import (
     normalize_planes, DCVC_ALIGN,
     jpeg_roundtrip_color, jpeg_roundtrip_mono,
     png_roundtrip_mono, png_roundtrip_color,
+    hevc_roundtrip_color, hevc_roundtrip_mono,
+    av1_roundtrip_color,  av1_roundtrip_mono,
+    vp9_roundtrip_color,  vp9_roundtrip_mono,
 )
 
 
+class PlanesCfg:
+    """
+    Codec-agnostic feature-plane config.
+    codec: 'jpeg' | 'png' | 'hevc' | 'av1' | 'vp9'
+    """
 
-# -------------------------------------------
-# Small cfg container (optional convenience)
-# -------------------------------------------
-# models/tensorSTE.py  (replace the old JPEGPlanesCfg)
-class JPEGPlanesCfg:
-    """
-    Separate configs for density and appearance planes.
-    Now supports codec selection: 'jpeg' or 'png'.
-    """
     def __init__(
         self,
         # shared
-        align: int = DCVC_ALIGN,
-        codec: str = "jpeg",  # 'jpeg' | 'png'
+        align: int,
+        codec: str = "jpeg",
+        vid_pix_fmt: str = "yuv420p",  # for hevc/av1/vp9
 
-        # density
+        # density planes
         den_packing_mode: str = "flatten",
         den_quant_mode: str   = "global",
         den_global_range: tuple[float, float] = (-25.0, 25.0),
-        den_quality: int = 80,                 # used if codec='jpeg'
-        den_png_level: int = 6,               # used if codec='png'
         den_r: int = 4, den_c: int = 4,
+        den_quality: int | None = None,     # jpeg quality
+        den_png_level: int | None = None,   # png level
+        den_hevc_qp: int | None = None,     # HEVC
+        den_hevc_preset: str | None = "medium",
+        den_av1_qp: int | None = None,      # AV1
+        den_av1_speed: int | None = 6,
+        den_vp9_qp: int | None = None,      # VP9
+        den_vp9_speed: int | None = 4,
 
-        # appearance
+        # appearance planes
         app_packing_mode: str = "flatten",
         app_quant_mode: str   = "global",
         app_global_range: tuple[float, float] = (-5.0, 5.0),
-        app_quality: int = 80,                 # jpeg
-        app_png_level: int = 6,               # png
         app_r: int = 6, app_c: int = 8,
+        app_quality: int | None = None,
+        app_png_level: int | None = None,
+        app_hevc_qp: int | None = None,
+        app_hevc_preset: str | None = "medium",
+        app_av1_qp: int | None = None,
+        app_av1_speed: int | None = 6,
+        app_vp9_qp: int | None = None,
+        app_vp9_speed: int | None = 4,
     ):
-        self.align = int(align)
+        def _i(x):  return None if x is None else int(x)
+        def _s(x):  return None if x is None else str(x)
+
+        self.align = int(DCVC_ALIGN)
         self.codec = str(codec).lower()
+        self.vid_pix_fmt = str(vid_pix_fmt)
 
         self.den_packing_mode = den_packing_mode
         self.den_quant_mode   = den_quant_mode
         self.den_global_range = den_global_range
-        self.den_quality      = int(den_quality)
-        self.den_png_level    = int(den_png_level)
         self.den_r, self.den_c = int(den_r), int(den_c)
 
         self.app_packing_mode = app_packing_mode
         self.app_quant_mode   = app_quant_mode
         self.app_global_range = app_global_range
-        self.app_quality      = int(app_quality)
-        self.app_png_level    = int(app_png_level)
         self.app_r, self.app_c = int(app_r), int(app_c)
 
+        # codec params (density) — None-safe
+        self.den_quality      = _i(den_quality)
+        self.den_png_level    = _i(den_png_level)
+        self.den_hevc_qp      = _i(den_hevc_qp)
+        self.den_hevc_preset  = _s(den_hevc_preset)
+        self.den_av1_qp       = _i(den_av1_qp)
+        self.den_av1_speed    = _i(den_av1_speed)
+        self.den_vp9_qp       = _i(den_vp9_qp)
+        self.den_vp9_speed    = _i(den_vp9_speed)
 
+        # codec params (appearance) — None-safe
+        self.app_quality      = _i(app_quality)
+        self.app_png_level    = _i(app_png_level)
+        self.app_hevc_qp      = _i(app_hevc_qp)
+        self.app_hevc_preset  = _s(app_hevc_preset)
+        self.app_av1_qp       = _i(app_av1_qp)
+        self.app_av1_speed    = _i(app_av1_speed)
+        self.app_vp9_qp       = _i(app_vp9_qp)
+        self.app_vp9_speed    = _i(app_vp9_speed)
 
 # -------------------------------------------
 # TensorSTE: TensoRF + STE+JPEG plane codec
@@ -95,18 +125,53 @@ class TensorSTE(TensorVMSplit):
     # ------------------------
     # Public init for JPEG cfg
     # ------------------------
-    def init_ste(self, jpeg_cfg: JPEGPlanesCfg):
-        self._jpeg_cfg = jpeg_cfg
+    def init_ste(self, cfg: "PlanesCfg"):
+        self._jpeg_cfg = cfg
         self.compression = True
         self.compress_before_volrend = True
         print("[TensorSTE] Plane codec cfg:"
-            f"\n  codec={jpeg_cfg.codec} align={jpeg_cfg.align}"
-            f"\n  den: mode={jpeg_cfg.den_packing_mode} quant={jpeg_cfg.den_quant_mode} "
-            f"range={jpeg_cfg.den_global_range} rxc={jpeg_cfg.den_r}x{jpeg_cfg.den_c} "
-            f"Q={jpeg_cfg.den_quality} L_png={jpeg_cfg.den_png_level}"
-            f"\n  app: mode={jpeg_cfg.app_packing_mode} quant={jpeg_cfg.app_quant_mode} "
-            f"range={jpeg_cfg.app_global_range} rxc={jpeg_cfg.app_r}x{jpeg_cfg.app_c} "
-            f"Q={jpeg_cfg.app_quality} L_png={jpeg_cfg.app_png_level}")
+            f"\n  codec={cfg.codec} align={cfg.align} pix_fmt={cfg.vid_pix_fmt}"
+            f"\n  den: mode={cfg.den_packing_mode} quant={cfg.den_quant_mode} "
+            f"range={cfg.den_global_range} rxc={cfg.den_r}x{cfg.den_c}"
+            f"\n  app: mode={cfg.app_packing_mode} quant={cfg.app_quant_mode} "
+            f"range={cfg.app_global_range} rxc={cfg.app_r}x{cfg.app_c}")
+
+    def _codec_params_for(self, which: str):  # which in {"den","app"}
+        cfg = self._jpeg_cfg
+        backend = cfg.codec
+        common = {"pix_fmt": cfg.vid_pix_fmt}
+
+        def _need(val, name: str, hint: str):
+            if val is None:
+                raise ValueError(
+                    f"[TensorSTE] Missing codec parameter '{name}' for backend='{backend}' "
+                    f"(set '{which}_{hint}' in your .txt or CLI)."
+                )
+            return val
+
+        if backend == "jpeg":
+            q = getattr(cfg, f"{which}_quality")
+            return {"quality": _need(q, "quality", "quality")}
+        if backend == "png":
+            lvl = getattr(cfg, f"{which}_png_level")
+            return {"level": _need(lvl, "png_level", "png_level")}
+        if backend == "hevc":
+            qp     = _need(getattr(cfg, f"{which}_hevc_qp"),     "qp",     "hevc_qp")
+            preset = getattr(cfg, f"{which}_hevc_preset") or "medium"
+            return {"qp": qp, "preset": preset, **common}
+        if backend == "av1":
+            qp  = _need(getattr(cfg, f"{which}_av1_qp"),  "qp",  "av1_qp")
+            spd = getattr(cfg, f"{which}_av1_speed")
+            spd = 6 if spd is None else int(spd)
+            return {"qp": qp, "cpu_used": spd, **common}
+        if backend == "vp9":
+            qp  = _need(getattr(cfg, f"{which}_vp9_qp"),  "qp",  "vp9_qp")
+            spd = getattr(cfg, f"{which}_vp9_speed")
+            spd = 4 if spd is None else int(spd)
+            return {"qp": qp, "cpu_used": spd, **common}
+
+        raise ValueError(f"Unknown codec backend: {backend}")
+
 
     # ------------------------
     # Aux loss is zero for JPEG
@@ -136,93 +201,136 @@ class TensorSTE(TensorVMSplit):
         global_range,
         packing_mode: str,
         align: int,
-        codec: str,                 # 'jpeg' | 'png'
-        quality_or_level: int,      # jpeg quality or png level
+        codec: str,                 # 'jpeg' | 'png' | 'hevc' | 'av1' | 'vp9'
+        codec_params: dict,         # validated per-codec kwargs from _codec_params_for
         device: torch.device,
         training: bool,
         r=4, c=4
     ):
         """
-        normalize -> pack -> (mono/color) encode -> decode -> crop -> unpack -> denorm
+        normalize -> pack -> encode/decode -> crop -> unpack -> denorm
         Returns rec [1,C,H,W], stats {'bits','bpp'}
         """
         assert plane.dim() == 4 and plane.shape[0] == 1, "expected [1,C,H,W]"
         C, H, W = plane.shape[1:]
 
+        # --- normalize to [0,1] for packing ---
         x = plane.to(torch.float32)
         x01, c_min, scale = normalize_planes(x, mode=quant_mode, global_range=global_range)
 
-        # Pack to [1,3,Hp,Wp] (for 'flatten' this is 3 identical channels)
+        # --- pack planes to a 3-channel canvas (RGB order) ---
         rgb01, (Hp, Wp) = pack_planes_to_rgb(x01, align=align, mode=packing_mode, r=r, c=c)
 
-        # === ENCODE/DECODE ===
+        use_mono = (packing_mode == "flatten")  # only mono path for 'flatten'
         codec = codec.lower()
-        use_mono = (packing_mode == "flatten")  # ONLY use mono for 'flatten' as requested
 
+        # --- encode/decode ---
         if use_mono:
-            # take first channel (mono), HxW float01 -> numpy
-            mono01 = rgb01[:, :1]                              # [1,1,Hp,Wp]
-            mono01_np = mono01[0, 0].contiguous().cpu().numpy()  # HxW
-
-            if codec == "jpeg":
-                mono_rec_np, bits = jpeg_roundtrip_mono(mono01_np, quality=int(quality_or_level))
+            mono01_np = rgb01[0, 0].contiguous().cpu().numpy()  # HxW
+            if   codec == "jpeg":
+                rec_np, bits = jpeg_roundtrip_mono(mono01_np, quality=int(codec_params["quality"]))
             elif codec == "png":
-                mono_rec_np, bits = png_roundtrip_mono(mono01_np, level=int(quality_or_level))
+                rec_np, bits = png_roundtrip_mono(mono01_np, level=int(codec_params["level"]))
+            elif codec == "hevc":
+                rec_np, bits = hevc_roundtrip_mono(
+                    mono01_np,
+                    qp=int(codec_params["qp"]),
+                    preset=str(codec_params.get("preset", "medium")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                )
+            elif codec == "av1":
+                rec_np, bits = av1_roundtrip_mono(
+                    mono01_np,
+                    qp=int(codec_params["qp"]),
+                    cpu_used=int(codec_params["cpu_used"]),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                )
+            elif codec == "vp9":
+                rec_np, bits = vp9_roundtrip_mono(
+                    mono01_np,
+                    qp=int(codec_params["qp"]),
+                    cpu_used=int(codec_params["cpu_used"]),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                )
             else:
                 raise ValueError(f"Unknown codec '{codec}'")
 
-            # back to [1,3,Hp,Wp] by repeating the mono
-            mono_rec = torch.from_numpy(mono_rec_np).to(torch.float32).unsqueeze(0).unsqueeze(0)  # [1,1,H,W]
-            rgb01_rec = mono_rec.repeat(1, 3, 1, 1).to(device, non_blocking=True)                 # [1,3,H,W]
+            # ensure decoded mono is 2D
+            if rec_np.ndim == 3:
+                rec_np = rec_np[..., 0]
+
+            mono_rec = torch.from_numpy(rec_np).to(torch.float32)[None, None, ...]  # [1,1,Hp,Wp]
+            rgb01_rec = mono_rec.repeat(1, 3, 1, 1).to(device, non_blocking=True)  # [1,3,Hp,Wp]
+
         else:
-            # color path (used if you ever switch packing_mode != 'flatten')
             rgb_np = rgb01[0].permute(1, 2, 0).contiguous().cpu().numpy()  # HxWx3 RGB
-            bgr_np = np.ascontiguousarray(rgb_np[..., ::-1])
-
-            if codec == "jpeg":
-                rec_bgr01, bits = jpeg_roundtrip_color(bgr_np, quality=int(quality_or_level))
+            bgr_np = np.ascontiguousarray(rgb_np[..., ::-1])               # -> BGR for OpenCV/ffmpeg
+            if   codec == "jpeg":
+                rec_bgr01, bits = jpeg_roundtrip_color(bgr_np, quality=int(codec_params["quality"]))
             elif codec == "png":
-                rec_bgr01, bits = png_roundtrip_color(bgr_np, level=int(quality_or_level))
+                rec_bgr01, bits = png_roundtrip_color(bgr_np, level=int(codec_params["level"]))
+            elif codec == "hevc":
+                rec_bgr01, bits = hevc_roundtrip_color(
+                    bgr_np,
+                    qp=int(codec_params["qp"]),
+                    preset=str(codec_params.get("preset", "medium")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                )
+            elif codec == "av1":
+                rec_bgr01, bits = av1_roundtrip_color(
+                    bgr_np,
+                    qp=int(codec_params["qp"]),
+                    cpu_used=int(codec_params["cpu_used"]),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                )
+            elif codec == "vp9":
+                rec_bgr01, bits = vp9_roundtrip_color(
+                    bgr_np,
+                    qp=int(codec_params["qp"]),
+                    cpu_used=int(codec_params["cpu_used"]),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                )
             else:
                 raise ValueError(f"Unknown codec '{codec}'")
 
-            rec_rgb01 = np.ascontiguousarray(rec_bgr01[..., ::-1])
-            rgb01_rec = torch.from_numpy(rec_rgb01).permute(2, 0, 1).unsqueeze(0).to(device, dtype=torch.float32, non_blocking=True)
+            rec_rgb01 = np.ascontiguousarray(rec_bgr01[..., ::-1])  # BGR->RGB
+            rgb01_rec = torch.from_numpy(rec_rgb01).permute(2, 0, 1)[None, ...].to(
+                device, dtype=torch.float32, non_blocking=True
+            )  # [1,3,Hp,Wp]
 
-        # crop (no-op if already aligned)
+        # --- crop away alignment padding, unpack, de-normalize ---
         rgb01_rec = crop_from_align(rgb01_rec, (Hp, Wp))
-
-        # Unpack back to planes in [0,1]
         rec01 = unpack_rgb_to_planes(rgb01_rec, C, (Hp, Wp), mode=packing_mode, r=r, c=c)
-
-        # Denorm to raw
         rec = (rec01 * scale + c_min).to(torch.float32)
 
-        # Stats
+        # --- stats ---
         bpp = float(bits) / float(Hp * Wp)
         stats = {"bits": int(bits), "bpp": bpp, "codec": codec, "mono": bool(use_mono)}
 
+        # --- STE ---
         if training and self._ste_enabled:
             rec = self._apply_ste(x, rec)
 
         return rec, stats
 
 
+
+
     # ------------------------------------------------------------------------
     # Override the "external codec" entry point to use our JPEG round-trip
     # ------------------------------------------------------------------------
     def compress_with_external_codec(self, den_feat_codec=None, app_feat_codec=None, mode: str = "train"):
-        assert self._jpeg_cfg is not None, "Call init_ste(JPEGPlanesCfg(...)) first."
+        assert self._jpeg_cfg is not None, "Call init_ste(PlanesCfg(...)) first."
         training = (mode == "train")
         cfg = self._jpeg_cfg
 
         # ---- density ----
         self.den_rec_plane, self.den_likelihood = [], []
+        den_params = self._codec_params_for("den")
         for p in self.density_plane:
             C = p.shape[1]
             if cfg.den_packing_mode == "flatten":
                 assert cfg.den_r * cfg.den_c == C, f"den r*c ({cfg.den_r}*{cfg.den_c}) != C ({C})"
-            q_or_l = cfg.den_quality if cfg.codec == "jpeg" else cfg.den_png_level
             rec, stats = self._im_roundtrip_plane_tensor(
                 plane=p.detach(),
                 quant_mode=cfg.den_quant_mode,
@@ -230,7 +338,7 @@ class TensorSTE(TensorVMSplit):
                 packing_mode=cfg.den_packing_mode,
                 align=cfg.align,
                 codec=cfg.codec,
-                quality_or_level=q_or_l,
+                codec_params=den_params,
                 device=self.device,
                 training=training,
                 r=cfg.den_r, c=cfg.den_c,
@@ -242,11 +350,11 @@ class TensorSTE(TensorVMSplit):
 
         # ---- appearance ----
         self.app_rec_plane, self.app_likelihood = [], []
+        app_params = self._codec_params_for("app")
         for p in self.app_plane:
             C = p.shape[1]
             if cfg.app_packing_mode == "flatten":
                 assert cfg.app_r * cfg.app_c == C, f"app r*c ({cfg.app_r}*{cfg.app_c}) != C ({C})"
-            q_or_l = cfg.app_quality if cfg.codec == "jpeg" else cfg.app_png_level
             rec, stats = self._im_roundtrip_plane_tensor(
                 plane=p.detach(),
                 quant_mode=cfg.app_quant_mode,
@@ -254,7 +362,7 @@ class TensorSTE(TensorVMSplit):
                 packing_mode=cfg.app_packing_mode,
                 align=cfg.align,
                 codec=cfg.codec,
-                quality_or_level=q_or_l,
+                codec_params=app_params,
                 device=self.device,
                 training=training,
                 r=cfg.app_r, c=cfg.app_c,
@@ -280,3 +388,4 @@ class TensorSTE(TensorVMSplit):
     def set_compress_before_volrend(self, enabled: bool = True):
         self.compress_before_volrend = bool(enabled)
         print(f"[TensorSTE] compress_before_volrend = {self.compress_before_volrend}")
+
