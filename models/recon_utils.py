@@ -6,9 +6,158 @@ import torch.nn.functional as F
 import math
 import cv2
 from typing import Tuple, Optional
+import subprocess, tempfile, os, shutil
 
 DCVC_ALIGN = 32
 
+
+# -------------------- FFmpeg-based video-codec round-trips --------------------
+
+def _ensure_ffmpeg():
+    if shutil.which("ffmpeg") is None:
+        raise RuntimeError("FFmpeg not found in PATH. Install ffmpeg or add it to PATH.")
+
+def _write_png(path: str, bgr_u8: np.ndarray):
+    ok = cv2.imwrite(path, bgr_u8)
+    if not ok:
+        raise RuntimeError(f"cv2.imwrite failed: {path}")
+
+def _ffmpeg_encode_decode_bgr(
+    bgr_f01_hw3: np.ndarray,
+    enc_args: list,
+    out_ext: str,
+) -> tuple[np.ndarray, int]:
+    """
+    Generic: encode one RGB image to given codec via ffmpeg, then decode back to PNG.
+    Returns: (decoded_bgr_f01, encoded_bits)
+    """
+    _ensure_ffmpeg()
+    assert bgr_f01_hw3.ndim == 3 and bgr_f01_hw3.shape[2] == 3, f"Expected HxWx3, got {bgr_f01_hw3.shape}"
+    bgr_u8 = to_uint8_from_float01(bgr_f01_hw3)
+
+    with tempfile.TemporaryDirectory() as td:
+        in_png  = os.path.join(td, "in.png")
+        out_cod = os.path.join(td, f"out.{out_ext}")
+        out_png = os.path.join(td, "dec.png")
+
+        _write_png(in_png, bgr_u8)
+
+        # Encode
+        cmd_enc = ["ffmpeg", "-y", "-loglevel", "error", "-i", in_png, *enc_args, out_cod]
+        subprocess.run(cmd_enc, check=True)
+
+        # Read encoded size (bits)
+        bits = os.path.getsize(out_cod) * 8
+
+        # Decode one frame back to PNG
+        cmd_dec = ["ffmpeg", "-y", "-loglevel", "error", "-i", out_cod, "-frames:v", "1", out_png]
+        subprocess.run(cmd_dec, check=True)
+
+        dec = cv2.imread(out_png, cv2.IMREAD_COLOR)
+        if dec is None:
+            raise RuntimeError("ffmpeg decode produced no image.")
+        dec_f01_bgr = to_float01_from_uint8(dec)
+        return dec_f01_bgr, bits
+
+# -------------------- HEVC (H.265) --------------------
+
+def hevc_roundtrip_color(
+    img_f01_bgr: np.ndarray,
+    crf: int = 28,
+    preset: str = "medium",
+    pix_fmt: str = "yuv420p",
+) -> tuple[np.ndarray, int]:
+    """
+    HEVC encode/decode (single frame) via libx265, raw HEVC stream container.
+    """
+    enc_args = [
+        "-frames:v", "1",
+        "-c:v", "libx265",
+        "-crf", str(int(crf)),
+        "-preset", str(preset),
+        "-pix_fmt", str(pix_fmt),
+        "-f", "hevc",
+    ]
+    return _ffmpeg_encode_decode_bgr(img_f01_bgr, enc_args, "hevc")
+
+def hevc_roundtrip_mono(
+    img_f01: np.ndarray,
+    crf: int = 28,
+    preset: str = "medium",
+    pix_fmt: str = "yuv420p",
+) -> tuple[np.ndarray, int]:
+    """
+    Mono path: we encode as 3-channel with replicated content.
+    """
+    bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)  # HxWx3, in [0,1]
+    return hevc_roundtrip_color(bgr, crf=crf, preset=preset, pix_fmt=pix_fmt)
+
+# -------------------- AV1 (libaom-av1) --------------------
+
+def av1_roundtrip_color(
+    img_f01_bgr: np.ndarray,
+    crf: int = 30,
+    cpu_used: int = 6,
+    pix_fmt: str = "yuv420p",
+) -> tuple[np.ndarray, int]:
+    """
+    AV1 encode/decode via libaom-av1, IVF container. CRF + -b:v 0 constant quality.
+    """
+    enc_args = [
+        "-frames:v", "1",
+        "-c:v", "libaom-av1",
+        "-b:v", "0",
+        "-crf", str(int(crf)),
+        "-cpu-used", str(int(cpu_used)),
+        "-row-mt", "1",
+        "-pix_fmt", str(pix_fmt),
+        "-f", "ivf",
+    ]
+    return _ffmpeg_encode_decode_bgr(img_f01_bgr, enc_args, "ivf")
+
+def av1_roundtrip_mono(
+    img_f01: np.ndarray,
+    crf: int = 30,
+    cpu_used: int = 6,
+    pix_fmt: str = "yuv420p",
+) -> tuple[np.ndarray, int]:
+    bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)
+    return av1_roundtrip_color(bgr, crf=crf, cpu_used=cpu_used, pix_fmt=pix_fmt)
+
+# -------------------- VP9 (libvpx-vp9) --------------------
+
+def vp9_roundtrip_color(
+    img_f01_bgr: np.ndarray,
+    crf: int = 32,
+    cpu_used: int = 4,
+    pix_fmt: str = "yuv420p",
+) -> tuple[np.ndarray, int]:
+    """
+    VP9 encode/decode via libvpx-vp9, WebM container. CRF + -b:v 0 constant quality.
+    """
+    enc_args = [
+        "-frames:v", "1",
+        "-c:v", "libvpx-vp9",
+        "-b:v", "0",
+        "-crf", str(int(crf)),
+        "-cpu-used", str(int(cpu_used)),
+        "-row-mt", "1",
+        "-pix_fmt", str(pix_fmt),
+        "-f", "webm",
+    ]
+    return _ffmpeg_encode_decode_bgr(img_f01_bgr, enc_args, "webm")
+
+def vp9_roundtrip_mono(
+    img_f01: np.ndarray,
+    crf: int = 32,
+    cpu_used: int = 4,
+    pix_fmt: str = "yuv420p",
+) -> tuple[np.ndarray, int]:
+    bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)
+    return vp9_roundtrip_color(bgr, crf=crf, cpu_used=cpu_used, pix_fmt=pix_fmt)
+
+
+###############################
 def to_uint8_from_float01(img_f01_hw_or_hw3: np.ndarray) -> np.ndarray:
     """float32 [0,1] → uint8 [0,255] with rounding; accepts HxW (mono) or HxWx3 (BGR)."""
     img = np.clip(img_f01_hw_or_hw3, 0.0, 1.0)
@@ -139,73 +288,200 @@ def sandwich_rgb_to_planes(
 
 
 # ======================== FEATURE PLANES (C=12) ========================
-def pack_planes_to_rgb(x: torch.Tensor, align: int = DCVC_ALIGN, mode: str = "flatten", r=4, c=4):
+def pack_planes_to_rgb(
+    x: torch.Tensor,
+    align: int = DCVC_ALIGN,
+    mode: str = "flatten",
+    r: int = 4,
+    c: int = 4,
+):
     """
-    x : [T, C, H, W], C == 12
+    x : [T, C, H, W]
     -> y_pad : [T, 3, H2_pad, W2_pad] ; orig : (H2_orig, W2_orig)
 
     modes:
-      - "mosaic":   3 groups of 4 channels; F.pixel_shuffle(scale=2) per group -> concat as RGB
-      - "flat4":    3 groups of 4 channels; tile each group into 2x2 mono -> concat as RGB
-      - "flatten":  tile channels to a mono 3x4 grid -> repeat to RGB (legacy)
+      - "mosaic":
+          * require C % 3 == 0 and C/3 is a perfect square s^2
+          * split into 3 groups of Cpc=C/3 channels
+          * per group run pixel_shuffle(scale=s) -> [T,1,sH,sW]
+          * stack 3 groups as RGB -> [T,3,sH,sW]
+      - "flat4":
+          * require C % 3 == 0 and C/3 is a perfect square s^2
+          * split into 3 groups; per group tile channels as s×s mono -> [T,1,sH,sW]
+          * stack 3 groups as RGB -> [T,3,sH,sW]
+      - "flatten":
+          * tile all channels into an r×c mono canvas -> [T,1,rH,cW]
+          * repeat mono to RGB -> [T,3,rH,cW]
     """
     T, C, H, W = x.shape
     if mode not in ("mosaic", "flatten", "flat4"):
         raise ValueError(f"pack: unknown mode '{mode}'")
 
-    if mode == "mosaic":
-        xg = x.view(T, 3, 4, H, W)
-        tiles = [F.pixel_shuffle(xg[:, g], 2) for g in range(3)]  # each [T,1,2H,2W]
-        y = torch.cat(tiles[::-1], dim=1)  # [T,3,2H,2W]  (B,G,R)→RGB-ish
-        h2, w2 = 2 * H, 2 * W
+    if mode in ("mosaic", "flat4"):
+        if C % 3 != 0:
+            raise ValueError(f"pack({mode}): C must be divisible by 3 (got C={C})")
+        Cpc = C // 3
+        s = int(math.sqrt(Cpc))
+        if s * s != Cpc:
+            raise ValueError(
+                f"pack({mode}): per-color channels C/3 must be a perfect square; got C/3={Cpc}"
+            )
+        xg = x.view(T, 3, Cpc, H, W)  # 3 groups
 
-    elif mode == "flat4":
-        # Tile each 4-ch group as 2x2 mono and map to one RGB channel
-        xg = x.view(T, 3, 4, H, W)                                 # [T,3,4,H,W]
-        mono = [rearrange(xg[:, g], 'T (r c) H W -> T 1 (r H) (c W)', r=2, c=2) for g in range(3)]
-        y = torch.cat(mono[::-1], dim=1)                           # [T,3,2H,2W]
-        h2, w2 = 2 * H, 2 * W
+        if mode == "mosaic":
+            # per group: [T,Cpc,H,W] --pixel_shuffle(s)--> [T,1,sH,sW]
+            tiles = [F.pixel_shuffle(xg[:, g], s) for g in range(3)]
+            # keep B,G,R ordering consistent with previous code (use [: : -1] if you want RGB)
+            y = torch.cat(tiles[::-1], dim=1)  # [T,3,sH,sW]
+            h2, w2 = s * H, s * W
+        else:  # flat4 (generalized)
+            # tile each group to mono s×s
+            mono = [rearrange(xg[:, g], 'T (ry cx) H W -> T 1 (ry H) (cx W)', ry=s, cx=s)
+                    for g in range(3)]
+            y = torch.cat(mono[::-1], dim=1)  # [T,3,sH,sW]
+            h2, w2 = s * H, s * W
 
     else:  # "flatten"
-        mono = rearrange(x, 'T (r c) H W -> T 1 (r H) (c W)', r=r, c=c)  # [T,1,3H,4W]
-        y = mono.repeat(1, 3, 1, 1)                                      # [T,3,3H,4W]
+        if r * c != C:
+            raise ValueError(f"pack(flatten): r*c={r*c} must equal C={C}")
+        mono = rearrange(x, 'T (ry cx) H W -> T 1 (ry H) (cx W)', ry=r, cx=c)  # [T,1,rH,cW]
+        y = mono.repeat(1, 3, 1, 1)                                           # [T,3,rH,cW]
         h2, w2 = r * H, c * W
 
-    # pad
+    # pad to multiples of `align`
     pad_h = (align - h2 % align) % align
     pad_w = (align - w2 % align) % align
     y_pad = F.pad(y, (0, pad_w, 0, pad_h), mode='replicate')
     return y_pad, (h2, w2)
 
 
-def unpack_rgb_to_planes(y_pad: torch.Tensor, C: int, orig_size: Tuple[int, int], mode: str = "flatten", r=4, c=4):
+def unpack_rgb_to_planes(
+    y_pad: torch.Tensor,
+    C: int,
+    orig_size: Tuple[int, int],
+    mode: str = "flatten",
+    r: int = 4,
+    c: int = 4,
+):
     """
-    Inverse of pack_planes_to_rgb (kept here unchanged; you’ll extend for flat4 in your next step).
+    Inverse of pack_planes_to_rgb (supports 'mosaic', 'flat4', 'flatten').
+
+    y_pad   : [T,3,H_pad,W_pad]
+    C       : target channel count
+    orig_size = (H2_orig, W2_orig) as returned by pack (before padding)
     """
-    if mode not in ("mosaic", "flatten"):
-        # NOTE: you'll add "flat4" inverse in the follow-up step
+    if mode not in ("mosaic", "flatten", "flat4"):
         raise ValueError(f"unpack: unknown mode '{mode}'")
 
     H2, W2 = orig_size
-    y = y_pad[..., :H2, :W2]
+    y = y_pad[..., :H2, :W2]  # crop the padding
 
-    if mode == "mosaic":
-        if C != 12:
-            raise ValueError(f"unpack(mosaic): C must be 12 (got {C})")
-        b, g, r = y.split(1, dim=1)
-        blocks = [F.pixel_unshuffle(ch, 2) for ch in (r, g, b)]
-        return torch.cat(blocks, dim=1)  # [T,12,H,W]
+    if mode in ("mosaic", "flat4"):
+        if C % 3 != 0:
+            raise ValueError(f"unpack({mode}): C must be divisible by 3 (got C={C})")
+        Cpc = C // 3
+        s = int(math.sqrt(Cpc))
+        if s * s != Cpc:
+            raise ValueError(
+                f"unpack({mode}): per-color channels C/3 must be a perfect square; got C/3={Cpc}"
+            )
+        # split to B,G,R (pack used tiles[::-1])
+        b, g, rch = y.split(1, dim=1)
 
-    elif mode == "flatten":
-        mono = y[:, :1]
-        if H2 % r != 0 or W2 % c != 0:
-            raise ValueError(f"unpack(flatten): orig_size {(H2,W2)} not divisible by (r,c)=({r},{c})")
-        H = H2 // r; W = W2 // c
-        x = rearrange(mono, 'T 1 (r H) (c W) -> T (r c) H W', r=r, c=c, H=H, W=W)
-        return x
+        if mode == "mosaic":
+            # per channel: [T,1,sH,sW] --pixel_unshuffle(s)--> [T,Cpc,H,W] with Cpc=s^2
+            blocks = [F.pixel_unshuffle(ch, s) for ch in (rch, g, b)]
+            x = torch.cat(blocks, dim=1)  # [T, C, H, W]
+            return x
+        else:  # flat4 inverse
+            # each channel is a mono tiling s×s -> recover s^2 slices
+            def _untile(mono_ch):
+                # T,1,sH,sW -> T,(s*s),H,W
+                return rearrange(mono_ch, 'T 1 (ry H) (cx W) -> T (ry cx) H W', ry=s, cx=s, H=H2//s, W=W2//s)
+            blocks = [_untile(ch) for ch in (rch, g, b)]
+            x = torch.cat(blocks, dim=1)  # [T, C, H, W]
+            return x
 
     else:  # "flatten"
-        raise ValueError(f"unpack: unknown mode '{mode}'")
+        if r * c != C:
+            raise ValueError(f"unpack(flatten): r*c={r*c} must equal C={C}")
+        mono = y[:, :1]
+        if H2 % r != 0 or W2 % c != 0:
+            raise ValueError(
+                f"unpack(flatten): orig_size {(H2,W2)} not divisible by (r,c)=({r},{c})"
+            )
+        H = H2 // r
+        W = W2 // c
+        x = rearrange(mono, 'T 1 (ry H) (cx W) -> T (ry cx) H W', ry=r, cx=c, H=H, W=W)
+        return x
+
+# def pack_planes_to_rgb(x: torch.Tensor, align: int = DCVC_ALIGN, mode: str = "flatten", r=4, c=4):
+#     """
+#     x : [T, C, H, W], C == 12
+#     -> y_pad : [T, 3, H2_pad, W2_pad] ; orig : (H2_orig, W2_orig)
+
+#     modes:
+#       - "mosaic":   3 groups of 4 channels; F.pixel_shuffle(scale=2) per group -> concat as RGB
+#       - "flat4":    3 groups of 4 channels; tile each group into 2x2 mono -> concat as RGB
+#       - "flatten":  tile channels to a mono 3x4 grid -> repeat to RGB (legacy)
+#     """
+#     T, C, H, W = x.shape
+#     if mode not in ("mosaic", "flatten", "flat4"):
+#         raise ValueError(f"pack: unknown mode '{mode}'")
+
+#     if mode == "mosaic":
+#         xg = x.view(T, 3, 4, H, W)
+#         tiles = [F.pixel_shuffle(xg[:, g], 2) for g in range(3)]  # each [T,1,2H,2W]
+#         y = torch.cat(tiles[::-1], dim=1)  # [T,3,2H,2W]  (B,G,R)→RGB-ish
+#         h2, w2 = 2 * H, 2 * W
+
+#     elif mode == "flat4":
+#         # Tile each 4-ch group as 2x2 mono and map to one RGB channel
+#         xg = x.view(T, 3, 4, H, W)                                 # [T,3,4,H,W]
+#         mono = [rearrange(xg[:, g], 'T (r c) H W -> T 1 (r H) (c W)', r=2, c=2) for g in range(3)]
+#         y = torch.cat(mono[::-1], dim=1)                           # [T,3,2H,2W]
+#         h2, w2 = 2 * H, 2 * W
+
+#     else:  # "flatten"
+#         mono = rearrange(x, 'T (r c) H W -> T 1 (r H) (c W)', r=r, c=c)  # [T,1,3H,4W]
+#         y = mono.repeat(1, 3, 1, 1)                                      # [T,3,3H,4W]
+#         h2, w2 = r * H, c * W
+
+#     # pad
+#     pad_h = (align - h2 % align) % align
+#     pad_w = (align - w2 % align) % align
+#     y_pad = F.pad(y, (0, pad_w, 0, pad_h), mode='replicate')
+#     return y_pad, (h2, w2)
+
+
+# def unpack_rgb_to_planes(y_pad: torch.Tensor, C: int, orig_size: Tuple[int, int], mode: str = "flatten", r=4, c=4):
+#     """
+#     Inverse of pack_planes_to_rgb (kept here unchanged; you’ll extend for flat4 in your next step).
+#     """
+#     if mode not in ("mosaic", "flatten"):
+#         # NOTE: you'll add "flat4" inverse in the follow-up step
+#         raise ValueError(f"unpack: unknown mode '{mode}'")
+
+#     H2, W2 = orig_size
+#     y = y_pad[..., :H2, :W2]
+
+#     if mode == "mosaic":
+#         if C != 12:
+#             raise ValueError(f"unpack(mosaic): C must be 12 (got {C})")
+#         b, g, r = y.split(1, dim=1)
+#         blocks = [F.pixel_unshuffle(ch, 2) for ch in (r, g, b)]
+#         return torch.cat(blocks, dim=1)  # [T,12,H,W]
+
+#     elif mode == "flatten":
+#         mono = y[:, :1]
+#         if H2 % r != 0 or W2 % c != 0:
+#             raise ValueError(f"unpack(flatten): orig_size {(H2,W2)} not divisible by (r,c)=({r},{c})")
+#         H = H2 // r; W = W2 // c
+#         x = rearrange(mono, 'T 1 (r H) (c W) -> T (r c) H W', r=r, c=c, H=H, W=W)
+#         return x
+
+#     else:  # "flatten"
+#         raise ValueError(f"unpack: unknown mode '{mode}'")
 
 
 # ======================== DENSITY (Dz=192) ========================

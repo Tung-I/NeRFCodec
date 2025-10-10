@@ -1,0 +1,33 @@
+{
+  "experiment_name": "NeRF-Synthetic Dataset",
+  "x_label": "Bitrate (MB)",
+  "y_label": "PSNR (dB)",
+  "y_limits": [27, 38],
+  "x_limits": [0, 5],
+  "legend_ncol": 4,
+  "metric_key": "metric",       
+  "show_markers": true,            
+  "methods": [
+    {
+      "name": "Ours (JPEG)",
+      "color": "C0",
+      "linestyle": "-",
+      "marker": "o",
+      "points": [
+        { "plane_rate_mb": 1.274, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 35.40 },
+        { "plane_rate_mb": 1.604, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 35.68 },
+        { "plane_rate_mb": 2.015, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 35.90 },
+        { "plane_rate_mb": 2.415, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 36.18 }
+      ]
+    },
+    {
+      "name": "NeRFCodec",
+      "linestyle": "None",
+      "marker": "s",
+      "color": "C1",
+      "points": [
+        { "den_codec_rate_mb": 0.809, "app_codec_rate_mb": 1.082, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 34.28 }
+      ]
+    }
+  ]
+}
