@@ -35,7 +35,7 @@ den_global_max   =  25.0
 den_r = 4
 den_c = 4
 den_av1_qp = 52                # try: 28/36/44/52
-den_av1_speed = 4              # 4..8 (higher=faster, larger)
+den_av1_speed = 6              # 4..8 (higher=faster, larger)
 
 # appearance stream
 app_packing_mode = flat4
@@ -45,4 +45,4 @@ app_global_max   =  5.0
 app_r = 6
 app_c = 8
 app_av1_qp = 52
-app_av1_speed = 4
+app_av1_speed = 6

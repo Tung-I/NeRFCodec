@@ -38,7 +38,7 @@ den_vp9_qp = 28                # try: 28/36/44/52
 den_vp9_speed = 4              # 2..8 (higher=faster, larger)
 
 # appearance stream
-app_packing_mode = flat4
+app_packing_mode = flatten
 app_quant_mode   = global
 app_global_min   = -5.0
 app_global_max   =  5.0

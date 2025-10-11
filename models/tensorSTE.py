@@ -16,7 +16,6 @@ from .recon_utils import (
     vp9_roundtrip_color,  vp9_roundtrip_mono,
 )
 
-
 class PlanesCfg:
     """
     Codec-agnostic feature-plane config.
@@ -115,12 +114,28 @@ class TensorSTE(TensorVMSplit):
     def __init__(self, aabb, gridSize, device, **kargs):
         super().__init__(aabb, gridSize, device, **kargs)
         # flags: keep trainer-compatible defaults
-        self.using_external_codec = True   # we will ignore external codec objects and use JPEG
-        self.compression = False           # will be set True after init_ste()
+        self.using_external_codec = True
+        self.compression = False
         self.compress_before_volrend = False
-        # JPEG/STE config placeholders
         self._ste_enabled = True
         self._jpeg_cfg = None
+
+        # -------- Codec cache (single-frame, per-plane) --------
+        self._cache_refresh_k   = 1      # run codec every K calls
+        self._cache_refresh_eps = 0.0    # relative L2 threshold to force refresh
+        self._cache_bpp_refresh_k = 1    # (kept for parity; used when you add grad-bpp)
+        self._cache_last_step   = -10**9
+        self._cache_ticks       = 0
+
+        # density caches (lists per-plane index)
+        self._den_cache_rec    = None    # list[Tensor] of [1,C,H,W] (detached, on self.device)
+        self._den_cache_stats  = None    # list[dict]
+        self._den_cache_snap   = None    # list[Tensor] snapshots of raw planes (detached)
+
+        # appearance caches
+        self._app_cache_rec    = None
+        self._app_cache_stats  = None
+        self._app_cache_snap   = None
 
     # ------------------------
     # Public init for JPEG cfg
@@ -129,12 +144,18 @@ class TensorSTE(TensorVMSplit):
         self._jpeg_cfg = cfg
         self.compression = True
         self.compress_before_volrend = True
+        # ---- cache knobs (optional; default=old behavior) ----
+        self._cache_refresh_k     = int(getattr(cfg, "codec_refresh_k", 1))
+        self._cache_refresh_eps   = float(getattr(cfg, "refresh_trigger_eps", 0.0))
+        self._cache_bpp_refresh_k = int(getattr(cfg, "bpp_refresh_k", 1))
         print("[TensorSTE] Plane codec cfg:"
-            f"\n  codec={cfg.codec} align={cfg.align} pix_fmt={cfg.vid_pix_fmt}"
-            f"\n  den: mode={cfg.den_packing_mode} quant={cfg.den_quant_mode} "
-            f"range={cfg.den_global_range} rxc={cfg.den_r}x{cfg.den_c}"
-            f"\n  app: mode={cfg.app_packing_mode} quant={cfg.app_quant_mode} "
-            f"range={cfg.app_global_range} rxc={cfg.app_r}x{cfg.app_c}")
+              f"\n  codec={cfg.codec} align={cfg.align} pix_fmt={cfg.vid_pix_fmt}"
+              f"\n  den: mode={cfg.den_packing_mode} quant={cfg.den_quant_mode} "
+              f"range={cfg.den_global_range} rxc={cfg.den_r}x{cfg.den_c}"
+              f"\n  app: mode={cfg.app_packing_mode} quant={cfg.app_quant_mode} "
+              f"range={cfg.app_global_range} rxc={cfg.app_r}x{cfg.app_c}"
+              f"\n  cache: K={self._cache_refresh_k} eps={self._cache_refresh_eps} "
+              f"bppK={self._cache_bpp_refresh_k}")
 
     def _codec_params_for(self, which: str):  # which in {"den","app"}
         cfg = self._jpeg_cfg
@@ -172,6 +193,109 @@ class TensorSTE(TensorVMSplit):
 
         raise ValueError(f"Unknown codec backend: {backend}")
 
+    # ------------------------
+    # Cache refresh routine
+    # ------------------------
+
+    @torch.no_grad()
+    def _rel_change(self, cur: torch.Tensor, snap: torch.Tensor) -> float:
+        if snap is None or cur.shape != snap.shape:
+            return float("inf")
+        num = (cur - snap).float().pow(2).sum()
+        den = snap.float().pow(2).sum().clamp_min(1e-12)
+        return float((num / den).sqrt().item())
+
+    @torch.no_grad()
+    def _planes_changed(self, curr_list: list[torch.Tensor], snap_list: list[torch.Tensor] | None) -> bool:
+        if self._cache_refresh_eps <= 0.0:
+            return False
+        if snap_list is None or len(snap_list) != len(curr_list):
+            return True
+        for cur, snap in zip(curr_list, snap_list):
+            if self._rel_change(cur, snap) > self._cache_refresh_eps:
+                return True
+        return False
+
+    def _gather_den_planes(self) -> list[torch.Tensor]:
+        # self.density_plane is a list of parameters shaped [1,C,H,W]
+        return [p for p in self.density_plane]
+
+    def _gather_app_planes(self) -> list[torch.Tensor]:
+        return [p for p in self.app_plane]
+
+    def set_codec_cache(self, refresh_k: int | None = None, refresh_eps: float | None = None, bpp_refresh_k: int | None = None):
+        if refresh_k is not None:
+            self._cache_refresh_k = int(refresh_k)
+        if refresh_eps is not None:
+            self._cache_refresh_eps = float(refresh_eps)
+        if bpp_refresh_k is not None:
+            self._cache_bpp_refresh_k = int(bpp_refresh_k)
+        print(f"[TensorSTE] cache knobs -> K={self._cache_refresh_k}, eps={self._cache_refresh_eps}, bppK={self._cache_bpp_refresh_k}")
+
+    @torch.no_grad()
+    def _maybe_refresh_codec_cache(self, training: bool):
+        """Refresh cached (detached) reconstructions and stats if K steps passed or planes changed a lot."""
+        self._cache_ticks += 1
+        do_time = (self._cache_refresh_k <= 1) or (self._cache_ticks - self._cache_last_step >= self._cache_refresh_k)
+
+        den_now = self._gather_den_planes()
+        app_now = self._gather_app_planes()
+        do_change = (self._planes_changed(den_now, self._den_cache_snap) or
+                     self._planes_changed(app_now, self._app_cache_snap))
+
+        if not (do_time or do_change):
+            return  # still fresh
+
+        cfg = self._jpeg_cfg
+        # --- prepare per-which codec params once ---
+        den_params = self._codec_params_for("den")
+        app_params = self._codec_params_for("app")
+
+        # --- recompute density cache ---
+        self._den_cache_rec, self._den_cache_stats, self._den_cache_snap = [], [], []
+        for p in den_now:
+            C = p.shape[1]
+            if cfg.den_packing_mode == "flatten":
+                assert cfg.den_r * cfg.den_c == C, f"den r*c ({cfg.den_r}*{cfg.den_c}) != C ({C})"
+            rec, stats = self._im_roundtrip_plane_tensor(
+                plane=p.detach(),  # encode current raw
+                quant_mode=cfg.den_quant_mode,
+                global_range=cfg.den_global_range,
+                packing_mode=cfg.den_packing_mode,
+                align=cfg.align,
+                codec=cfg.codec,
+                codec_params=den_params,
+                device=self.device,
+                training=False,    # <- no STE here; applied later on-the-fly
+                r=cfg.den_r, c=cfg.den_c,
+            )
+            self._den_cache_rec.append(rec.detach())
+            self._den_cache_stats.append(stats)
+            self._den_cache_snap.append(p.detach().clone())
+
+        # --- recompute appearance cache ---
+        self._app_cache_rec, self._app_cache_stats, self._app_cache_snap = [], [], []
+        for p in app_now:
+            C = p.shape[1]
+            if cfg.app_packing_mode == "flatten":
+                assert cfg.app_r * cfg.app_c == C, f"app r*c ({cfg.app_r}*{cfg.app_c}) != C ({C})"
+            rec, stats = self._im_roundtrip_plane_tensor(
+                plane=p.detach(),
+                quant_mode=cfg.app_quant_mode,
+                global_range=cfg.app_global_range,
+                packing_mode=cfg.app_packing_mode,
+                align=cfg.align,
+                codec=cfg.codec,
+                codec_params=app_params,
+                device=self.device,
+                training=False,   # <- no STE here
+                r=cfg.app_r, c=cfg.app_c,
+            )
+            self._app_cache_rec.append(rec.detach())
+            self._app_cache_stats.append(stats)
+            self._app_cache_snap.append(p.detach().clone())
+
+        self._cache_last_step = self._cache_ticks
 
     # ------------------------
     # Aux loss is zero for JPEG
@@ -236,21 +360,21 @@ class TensorSTE(TensorVMSplit):
                     mono01_np,
                     qp=int(codec_params["qp"]),
                     preset=str(codec_params.get("preset", "medium")),
-                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv444p")),
                 )
             elif codec == "av1":
                 rec_np, bits = av1_roundtrip_mono(
                     mono01_np,
                     qp=int(codec_params["qp"]),
                     cpu_used=int(codec_params["cpu_used"]),
-                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv444p")),
                 )
             elif codec == "vp9":
                 rec_np, bits = vp9_roundtrip_mono(
                     mono01_np,
                     qp=int(codec_params["qp"]),
                     cpu_used=int(codec_params["cpu_used"]),
-                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv444p")),
                 )
             else:
                 raise ValueError(f"Unknown codec '{codec}'")

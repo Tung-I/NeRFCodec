@@ -38,7 +38,7 @@ den_hevc_qp = 32               # try: 22/28/32/38
 den_hevc_preset = medium       # ultrafast..placebo
 
 # appearance stream
-app_packing_mode = flat4     # you can switch to mosaic/flat4 if desired
+app_packing_mode = flatten     # you can switch to mosaic/flat4 if desired
 app_quant_mode   = global
 app_global_min   = -5.0
 app_global_max   =  5.0
