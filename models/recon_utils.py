@@ -174,19 +174,70 @@ def hevc_roundtrip_mono(img_f01: np.ndarray, qp: int = 32, preset: str = "medium
 # =======================================
 # AV1 (libaom-av1) — constant QP
 # =======================================
+# def av1_roundtrip_color(
+#     img_f01_bgr: np.ndarray,
+#     qp: int = None,
+#     cpu_used: int = 6,
+#     pix_fmt: str = "yuv444p",
+# ) -> tuple[np.ndarray, int]:
+#     opts = {
+#         "end-usage": "q",       # QP mode
+#         "qp": int(qp),
+#         "cpu-used": int(cpu_used),
+#         "row-mt": 1,
+#     }
+#     return _pyav_roundtrip_bgr_one(
+#         img_f01_bgr,
+#         encoder="libaom-av1",
+#         container="ivf",
+#         pix_fmt=pix_fmt,
+#         fps=25, gop=1, options=opts,
+#     )
+
+# def av1_roundtrip_mono(
+#     img_f01: np.ndarray, qp: int = None, cpu_used: int = 6, pix_fmt: str = "yuv444p"
+# ) -> tuple[np.ndarray, int]:
+#     # Build 3-channel RGB, let PyAV convert to yuv444p, but code luma-only via 'monochrome=1'
+#     bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)
+#     opts = {
+#         "end-usage": "q",
+#         "qp": int(qp),
+#         "cpu-used": int(cpu_used),
+#         "row-mt": 1,
+#         "monochrome": 1,  # AV1 monochrome bitstream
+#     }
+#     return _pyav_roundtrip_bgr_one(
+#         bgr, encoder="libaom-av1", container="ivf", pix_fmt=pix_fmt, fps=25, gop=1, options=opts
+#     )
+
+# =======================================
+# AV1 (libaom-av1) — map QP -> CRF (CQ mode)
+# =======================================
 def av1_roundtrip_color(
     img_f01_bgr: np.ndarray,
-    qp: int = 36,
+    qp: int = None,
     cpu_used: int = 6,
     pix_fmt: str = "yuv444p",
 ) -> tuple[np.ndarray, int]:
+    """
+    Use libaom AV1 in constrained-quality mode:
+      - Interpret incoming `qp` as CRF (0..63, lower = higher quality).
+      - Set end-usage=cq and bit_rate=0 to honor CRF.
+    """
+    crf = 32 if qp is None else int(np.clip(int(qp), 0, 63))
+
+    # libaom CQ: end-usage=cq + crf + b=0
     opts = {
-        "end-usage": "q",       # QP mode
-        "qp": int(qp),
-        "cpu-used": int(cpu_used),
-        "row-mt": 1,
+        "end-usage": "cq",
+        "crf": str(crf),
+        "cpu-used": str(int(cpu_used)),
+        "row-mt": "1",
+        # NOTE: bitrate is not an AVOption here; set via codec_context.bit_rate below.
     }
-    return _pyav_roundtrip_bgr_one(
+
+    # We reuse the core util but also need to force bit_rate=0 on the context.
+    # Do that by wrapping _pyav_roundtrip_bgr_one with a tiny shim:
+    return _pyav_roundtrip_bgr_one_with_bitrate0(
         img_f01_bgr,
         encoder="libaom-av1",
         container="ivf",
@@ -194,21 +245,97 @@ def av1_roundtrip_color(
         fps=25, gop=1, options=opts,
     )
 
+
 def av1_roundtrip_mono(
-    img_f01: np.ndarray, qp: int = 36, cpu_used: int = 6, pix_fmt: str = "yuv444p"
+    img_f01: np.ndarray,
+    qp: int = None,
+    cpu_used: int = 6,
+    pix_fmt: str = "yuv444p",
 ) -> tuple[np.ndarray, int]:
-    # Build 3-channel RGB, let PyAV convert to yuv444p, but code luma-only via 'monochrome=1'
+    """
+    Monochrome: still build a 3-channel canvas (keeps the same packing path),
+    but signal monochrome to libaom and use CRF mode as above.
+    """
+    crf = 32 if qp is None else int(np.clip(int(qp), 0, 63))
     bgr = np.stack([img_f01, img_f01, img_f01], axis=-1)
+
     opts = {
-        "end-usage": "q",
-        "qp": int(qp),
-        "cpu-used": int(cpu_used),
-        "row-mt": 1,
-        "monochrome": 1,  # AV1 monochrome bitstream
+        "end-usage": "cq",
+        "crf": str(crf),
+        "cpu-used": str(int(cpu_used)),
+        "row-mt": "1",
+        "monochrome": "1",
     }
-    return _pyav_roundtrip_bgr_one(
-        bgr, encoder="libaom-av1", container="ivf", pix_fmt=pix_fmt, fps=25, gop=1, options=opts
+
+    return _pyav_roundtrip_bgr_one_with_bitrate0(
+        bgr,
+        encoder="libaom-av1",
+        container="ivf",
+        pix_fmt=pix_fmt,
+        fps=25, gop=1, options=opts,
     )
+
+
+# ---- helper shim: identical to _pyav_roundtrip_bgr_one but forces bit_rate=0 ----
+def _pyav_roundtrip_bgr_one_with_bitrate0(
+    bgr_f01_hw3: np.ndarray,
+    *,
+    encoder: str,
+    container: str,
+    pix_fmt: str,
+    fps: int = 25,
+    gop: int = 1,
+    options: dict | None = None,
+) -> tuple[np.ndarray, int]:
+    assert bgr_f01_hw3.ndim == 3 and bgr_f01_hw3.shape[2] == 3, f"Expected HxWx3, got {bgr_f01_hw3.shape}"
+    H, W = int(bgr_f01_hw3.shape[0]), int(bgr_f01_hw3.shape[1])
+
+    rgb_u8 = np.ascontiguousarray(
+        np.clip(np.round(bgr_f01_hw3[..., ::-1] * 255.0), 0, 255).astype(np.uint8)
+    )
+
+    out_buf = io.BytesIO()
+    oc = av.open(out_buf, mode="w", format=container)
+
+    stream = oc.add_stream(encoder, rate=fps)
+    stream.width = W
+    stream.height = H
+    stream.time_base = Fraction(1, fps)
+    stream.codec_context.time_base = Fraction(1, fps)
+    stream.gop_size = int(gop)
+    stream.pix_fmt = pix_fmt
+
+    # CRF/CQ requires bit_rate == 0 (same as ffmpeg -b:v 0)
+    stream.codec_context.bit_rate = 0
+
+    if options:
+        for k, v in options.items():
+            stream.codec_context.options[str(k)] = str(v)
+
+    frame = av.VideoFrame.from_ndarray(rgb_u8, format="rgb24").reformat(format=pix_fmt)
+
+    for packet in stream.encode(frame):
+        oc.mux(packet)
+    for packet in stream.encode(None):
+        oc.mux(packet)
+    oc.close()
+
+    bitstream = out_buf.getvalue()
+    bits = len(bitstream) * 8
+
+    # decode
+    in_buf = io.BytesIO(bitstream)
+    ic = av.open(in_buf, mode="r", format=container)
+    rec = None
+    for frm in ic.decode(video=0):
+        rgb = frm.to_ndarray(format="rgb24")
+        rec = rgb
+        break
+    ic.close()
+    if rec is None or rec.shape[0] != H or rec.shape[1] != W:
+        raise RuntimeError("PyAV decode failed or size mismatch.")
+    dec_bgr_f01 = (rec[..., ::-1].astype(np.float32)) / 255.0
+    return dec_bgr_f01, bits
 
 
 # =======================================

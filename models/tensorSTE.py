@@ -213,6 +213,7 @@ class TensorSTE(TensorVMSplit):
             return True
         for cur, snap in zip(curr_list, snap_list):
             if self._rel_change(cur, snap) > self._cache_refresh_eps:
+                print(f"[TensorSTE] Plane changed: {self._rel_change(cur, snap)} > {self._cache_refresh_eps}")
                 return True
         return False
 
@@ -398,21 +399,21 @@ class TensorSTE(TensorVMSplit):
                     bgr_np,
                     qp=int(codec_params["qp"]),
                     preset=str(codec_params.get("preset", "medium")),
-                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv444p")),
                 )
             elif codec == "av1":
                 rec_bgr01, bits = av1_roundtrip_color(
                     bgr_np,
                     qp=int(codec_params["qp"]),
                     cpu_used=int(codec_params["cpu_used"]),
-                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv444p")),
                 )
             elif codec == "vp9":
                 rec_bgr01, bits = vp9_roundtrip_color(
                     bgr_np,
                     qp=int(codec_params["qp"]),
                     cpu_used=int(codec_params["cpu_used"]),
-                    pix_fmt=str(codec_params.get("pix_fmt", "yuv420p")),
+                    pix_fmt=str(codec_params.get("pix_fmt", "yuv444p")),
                 )
             else:
                 raise ValueError(f"Unknown codec '{codec}'")
@@ -438,61 +439,38 @@ class TensorSTE(TensorVMSplit):
         return rec, stats
 
 
-
-
     # ------------------------------------------------------------------------
     # Override the "external codec" entry point to use our JPEG round-trip
     # ------------------------------------------------------------------------
     def compress_with_external_codec(self, den_feat_codec=None, app_feat_codec=None, mode: str = "train"):
         assert self._jpeg_cfg is not None, "Call init_ste(PlanesCfg(...)) first."
         training = (mode == "train")
-        cfg = self._jpeg_cfg
 
-        # ---- density ----
+        # 1) refresh cache if needed (slow path only every K or when changed)
+        self._maybe_refresh_codec_cache(training=training)
+
+        # 2) serve cached recs; apply STE on-the-fly if training
         self.den_rec_plane, self.den_likelihood = [], []
-        den_params = self._codec_params_for("den")
-        for p in self.density_plane:
-            C = p.shape[1]
-            if cfg.den_packing_mode == "flatten":
-                assert cfg.den_r * cfg.den_c == C, f"den r*c ({cfg.den_r}*{cfg.den_c}) != C ({C})"
-            rec, stats = self._im_roundtrip_plane_tensor(
-                plane=p.detach(),
-                quant_mode=cfg.den_quant_mode,
-                global_range=cfg.den_global_range,
-                packing_mode=cfg.den_packing_mode,
-                align=cfg.align,
-                codec=cfg.codec,
-                codec_params=den_params,
-                device=self.device,
-                training=training,
-                r=cfg.den_r, c=cfg.den_c,
-            )
+        self.app_rec_plane, self.app_likelihood = [], []
+
+        # density
+        if self._den_cache_rec is None:
+            # if user calls before first refresh and K>1, force a refresh now
+            self._maybe_refresh_codec_cache(training=training)
+        for p, rec_detached, stats in zip(self.density_plane, self._den_cache_rec, self._den_cache_stats):
+            rec = rec_detached
             if training and self._ste_enabled:
-                rec = self._apply_ste(p, rec)
+                rec = self._apply_ste(p, rec_detached)  # STE: forward=rec, grad=identity wrt p
             self.den_rec_plane.append(rec)
             self.den_likelihood.append(stats)
 
-        # ---- appearance ----
-        self.app_rec_plane, self.app_likelihood = [], []
-        app_params = self._codec_params_for("app")
-        for p in self.app_plane:
-            C = p.shape[1]
-            if cfg.app_packing_mode == "flatten":
-                assert cfg.app_r * cfg.app_c == C, f"app r*c ({cfg.app_r}*{cfg.app_c}) != C ({C})"
-            rec, stats = self._im_roundtrip_plane_tensor(
-                plane=p.detach(),
-                quant_mode=cfg.app_quant_mode,
-                global_range=cfg.app_global_range,
-                packing_mode=cfg.app_packing_mode,
-                align=cfg.align,
-                codec=cfg.codec,
-                codec_params=app_params,
-                device=self.device,
-                training=training,
-                r=cfg.app_r, c=cfg.app_c,
-            )
+        # appearance
+        if self._app_cache_rec is None:
+            self._maybe_refresh_codec_cache(training=training)
+        for p, rec_detached, stats in zip(self.app_plane, self._app_cache_rec, self._app_cache_stats):
+            rec = rec_detached
             if training and self._ste_enabled:
-                rec = self._apply_ste(p, rec)
+                rec = self._apply_ste(p, rec_detached)
             self.app_rec_plane.append(rec)
             self.app_likelihood.append(stats)
 
@@ -502,9 +480,6 @@ class TensorSTE(TensorVMSplit):
         }
 
 
-    # --------------------------------------------------------
-    # Optional toggles you may call from the training script
-    # --------------------------------------------------------
     def set_ste(self, enabled: bool = True):
         self._ste_enabled = bool(enabled)
         print(f"[TensorSTE] STE {'enabled' if self._ste_enabled else 'disabled'}")
@@ -512,4 +487,6 @@ class TensorSTE(TensorVMSplit):
     def set_compress_before_volrend(self, enabled: bool = True):
         self.compress_before_volrend = bool(enabled)
         print(f"[TensorSTE] compress_before_volrend = {self.compress_before_volrend}")
+
+
 

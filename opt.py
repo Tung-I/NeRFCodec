@@ -3,6 +3,20 @@ import configargparse
 def config_parser(cmd=None):
     parser = configargparse.ArgumentParser()
 
+    # ----------------- Evaluation-----------------
+    parser.add_argument("--eval_dir", type=str, default=None,
+                        help='where to store eval results')
+    parser.add_argument("--ckpt_dir", type=str, default=None,
+                        help='directory to load checkpoints from')
+
+    # ----------------- Fix trainable codec parameters-----------------
+    parser.add_argument("--fix_encoder_prior", type=int, default=None)
+    parser.add_argument("--fix_module", type=str, default=None,
+                        help="Which codec module to fix (freeze). Options: entropy_parameters, context_prediction, adaptor.")
+    parser.add_argument("--freeze_scope", type=str, default="both", choices=["both", "den", "app"], help="Scope for freezing.")
+    parser.add_argument("--exclude_frozen_from_bitrate", type=int, default=1,
+                        help="If true, exclude frozen params from bitrate computation.")
+
     # ----------------- logging -----------------
     parser.add_argument("--wandb_project", type=str, default="nerfcodec-ste")
     parser.add_argument("--wandb_off", type=int, default=0)  # 1 to disable (offline)
@@ -18,6 +32,9 @@ def config_parser(cmd=None):
     )
     group.add_argument("--align", type=int, default=32, help="Pad image canvas to multiples of this.")
     group.add_argument("--ste_enabled", type=int, default=1, help="Toggle STE on/off.")
+    group.add_argument("--refresh_k", type=int, default=1, help="Codec refresh frequency.")
+    group.add_argument("--refresh_eps", type=float, default=0.01, help="Codec refresh threshold (if applicable).")
+
 
     # Pixel format for video codecs (hevc/av1/vp9). yuv420p is compatible & fastest.
     group.add_argument(
@@ -135,7 +152,7 @@ def config_parser(cmd=None):
     parser.add_argument('--downsample_test', type=float, default=1.0)
 
     parser.add_argument('--model_name', type=str, default='TensorVMSplit',
-                        choices=['TensorVMSplit', 'TensorCP', 'TriPlane', 'TensorSTE'])
+                        choices=['TensorVMSplit', 'TensorCP', 'TriPlane', 'TensorSTE', 'FixTensorVMSplit'])
 
     # loader options
     parser.add_argument("--batch_size", type=int, default=4096)

@@ -120,6 +120,7 @@ def save_system_ckpt(path, tensorf, optimizer, aux_optimizer, global_step, kwarg
 
     torch.save(base, path)
 
+
 def configure_optimizers(net, args):
     """Separate parameters for the main optimizer and the auxiliary optimizer.
     Return two optimizers"""

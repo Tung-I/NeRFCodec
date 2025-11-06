@@ -21,10 +21,16 @@ python eval_tensorf_pack_planes.py \
   --outdir log_2/nerf_chair/planes_eval 
 
 python eval_tensorf_pack_planes.py \
-  --den_packing_mode flat4 --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
   --app_packing_mode mosaic --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
   --emit_png\
-  --ckpt log_2/noise_gaussian_heavy/noise_gaussian_heavy_compression_1199.th
+  --ckpt log_2/nerf_lego_jpeg80/tensorste_lego_jpeg80_compression_19999.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode flatten --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log/tensorf_lego_VM/tensorf_lego_VM.th
 """
 
 

@@ -1,0 +1,48 @@
+dataset_name = blender
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair
+expname = ste_chair_hevcqp28
+basedir = ./log
+
+# === training ===
+n_iters = 20000
+batch_size = 4096
+N_voxel_init = 2097156
+N_voxel_final = 27000000
+upsamp_list = [2000,3000,4000,5500,7000]
+update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
+shadingMode = MLP_Fea
+fea2denseAct = softplus
+view_pe = 2
+fea_pe = 2
+L1_weight_inital = 1e-5
+L1_weight_rest = 1e-5
+rm_weight_mask_thre = 1e-4
+N_vis = 5
+render_test = 1
+
+# === STE plane codec backend ===
+model_name = TensorSTE
+codec_backend = hevc           # jpeg | png | hevc | av1 | vp9
+compression = 1
+compress_before_volrend = 1
+vid_pix_fmt = yuv444p          # yuv420p|yuv444p (420 is faster/smaller)
+
+# density stream
+den_packing_mode = flatten
+den_quant_mode   = global
+den_global_min   = -25.0
+den_global_max   =  25.0
+den_r = 4
+den_c = 4
+den_hevc_qp = 28               # try: 22/28/32/38
+den_hevc_preset = medium       # ultrafast..placebo
+
+# appearance stream
+app_packing_mode = flatten     # you can switch to mosaic/flat4 if desired
+app_quant_mode   = global
+app_global_min   = -5.0
+app_global_max   =  5.0
+app_r = 6
+app_c = 8
+app_hevc_qp = 28
+app_hevc_preset = medium

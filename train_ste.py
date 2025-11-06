@@ -108,7 +108,7 @@ def _build_planescfg_from_args(args) -> PlanesCfg:
     return PlanesCfg(
         align=getattr(args, "align", 32),
         codec=str(getattr(args, "codec_backend", "jpeg")).lower(),
-        vid_pix_fmt=str(getattr(args, "vid_pix_fmt", "yuv420p")),
+        vid_pix_fmt=str(getattr(args, "vid_pix_fmt", "yuv444p")),
 
         # density
         den_packing_mode=args.den_packing_mode,
@@ -248,6 +248,14 @@ def reconstruction(args):
     aabb = train_dataset.scene_bbox.to(device)
     reso_cur = N_to_reso(args.N_voxel_init, aabb)
     tensorf = _build_model(args, aabb, reso_cur, near_far)
+
+    # wire refresh_k/refresh_eps to TensorSTE cache
+    if hasattr(tensorf, "set_codec_cache"):
+        tensorf.set_codec_cache(
+            refresh_k=args.refresh_k,
+            refresh_eps=args.refresh_eps,
+            bpp_refresh_k=args.refresh_k,  # match your choice
+        )
 
     # nSamples policy
     if args.compression:

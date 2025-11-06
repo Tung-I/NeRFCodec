@@ -1,7 +1,7 @@
 
 dataset_name = nsvf
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Steamtrain
-expname =  tensorste_steamtrain_jpeg65
+expname =  ste_steamtrain_jpeg65
 basedir = ./log
 
 # === training ===

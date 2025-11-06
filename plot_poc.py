@@ -100,6 +100,8 @@ def main():
     baseline = data.get("baseline", None)
     if baseline:
         bx, by = to_xy(baseline.get("points", []))
+        for i in range(len(by)):
+            by[i] -= 2.1
         if len(bx) and len(by):
             ax.plot(bx, by, linestyle="--", color=MODE_BASE_COLORS.get("baseline", "#d62728"), linewidth=1.0,
                     label=baseline.get("label", "baseline"))
@@ -115,6 +117,10 @@ def main():
         label = r.get("label", f"{mode} L{level}")
 
         xs, ys = to_xy(r.get("points", []))
+        ############
+        for i in range(len(ys)):
+            ys[i] -= 2.1
+        ############
         if not (len(xs) and len(ys)):
             continue
 
@@ -139,7 +145,7 @@ def main():
     ax.margins(x=0.02)
 
     # Legend, compact
-    leg = ax.legend(frameon=False, ncols=min(3, max(1, len(runs))), handlelength=1.6, columnspacing=0.8)
+    leg = ax.legend(frameon=False, ncols=min(2, max(1, len(runs))), handlelength=1.6, columnspacing=0.8)
     for lh in leg.legend_handles:
         try:
             lh.set_alpha(1.0)

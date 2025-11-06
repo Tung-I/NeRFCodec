@@ -1,7 +1,7 @@
 
 dataset_name = nsvf
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Robot
-expname =  tensorste_robot_jpeg20
+expname =  ste_robot_jpeg20
 basedir = ./log
 
 # === training ===

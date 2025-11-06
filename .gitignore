@@ -6,5 +6,6 @@
 
 log/*
 log_2/*
+log3/*
 !log/.gitkeep
 eval_outputs/*

@@ -1,7 +1,7 @@
 
 dataset_name = nsvf
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Palace
-expname =  tensorste_palace_jpeg80
+expname =  ste_palace_jpeg80
 basedir = ./log
 
 # === training ===

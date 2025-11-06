@@ -1,0 +1,61 @@
+dataset_name = blender
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair
+expname = tensorf_chair_VM_codec_fix_cp
+basedir = ./log
+
+n_iters = 80000
+batch_size = 4096
+
+N_voxel_init = 2097156
+N_voxel_final = 27000000
+upsamp_list = [2000,3000,4000,5500,7000]
+update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
+
+N_vis = 5
+vis_every = 5000
+
+render_test = 1
+
+n_lamb_sigma = [32,32,32]
+n_lamb_sh = [96,96,96]
+
+# NEW: use the fixed-variant model (script forces this, but set for clarity)
+model_name = FixTensorVMSplit
+
+shadingMode = MLP_Fea
+fea2denseAct = softplus
+view_pe = 2
+fea_pe = 2
+
+L1_weight_inital = 8e-5
+L1_weight_rest = 4e-5
+rm_weight_mask_thre = 1e-4
+
+# ---------------------------
+# Codec finetune essentials
+# ---------------------------
+compression = 1
+compression_strategy = adaptor_feat_coding
+compress_before_volrend = 1
+vec_qat = 1
+rate_penalty = 1
+den_rate_weight = 1.0
+app_rate_weight = 1.0
+lr_feat_codec = 1e-4
+fix_decoder_prior = 0
+fix_encoder_prior = 0
+
+# ---------------------------
+# NEW: freeze controls
+# ---------------------------
+# Choose one:
+#   fix_module = entropy_parameters
+#   fix_module = context_prediction
+#   fix_module = none
+fix_module = context_prediction
+
+# Apply to which side: {"both","den","app"}
+freeze_scope = both
+
+# When reporting bitrate, exclude frozen modules from per-content payload
+exclude_frozen_from_bitrate = 1

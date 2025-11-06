@@ -1,7 +1,7 @@
 
 dataset_name = nsvf
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/Synthetic_NSVF/Bike
-expname =  tensorste_bike_jpeg20
+expname =  ste_bike_jpeg20
 basedir = ./log
 
 # === training ===

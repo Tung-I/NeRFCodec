@@ -3,10 +3,11 @@ import argparse, json, itertools, sys
 from typing import Dict, List, Tuple
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.ticker import LogLocator, LogFormatterMathtext
 
 """
 Usage:
-    python plot_rd.py --json nerf_chair.json --out nerf_chair_rd_curve.png --no-show
+    python plot_rd.py --json nerf_chair.json --out nerf_chair_rd_curve.png --no-show --log-scale
 """
 
 # ------------------------------
@@ -52,6 +53,8 @@ def parse_args():
     ap.add_argument("--out", default="", help="Output image path (png/pdf/svg). If empty, just shows the plot.")
     ap.add_argument("--dpi", type=int, default=200, help="Figure DPI for saving.")
     ap.add_argument("--no-show", action="store_true", help="Do not display window; useful on headless.")
+    ap.add_argument("--log-scale", action="store_true",
+                    help="Use log10 scale on the x-axis (rates).")
     return ap.parse_args()
 
 # ------------------------------
@@ -77,7 +80,22 @@ def main():
         sys.exit(1)
 
     plt.figure(figsize=(7.0, 4.8))
+    ax = plt.gca()
+
+    # If using log-scale, configure axis before plotting (so minor ticks work nicely)
+    if args.log_scale:
+        ax.set_xscale('log', base=10)
+        # Major ticks at 10^k with mathtext labels
+        ax.xaxis.set_major_locator(LogLocator(base=10.0))
+        ax.xaxis.set_major_formatter(LogFormatterMathtext(base=10.0))
+        # Minor ticks at 2..9 * 10^k
+        ax.xaxis.set_minor_locator(LogLocator(base=10.0, subs=np.arange(2, 10)*0.1))
+        ax.tick_params(which='both', direction='in')
+
+    any_nonpos = False
+
     for i, method in enumerate(methods):
+        # print(f"Processing method: {method}")
         name = method.get("name", f"Method {i+1}")
         points = method.get("points", [])
         if not points:
@@ -85,9 +103,18 @@ def main():
 
         rates, metrics = extract_xy(points, metric_key)
 
+        if args.log_scale:
+            # guard against non-positive rates
+            mask = rates > 0
+            if not np.all(mask):
+                any_nonpos = True
+                rates = rates[mask]
+                metrics = metrics[mask]
+
         color     = method.get("color", None)
         marker    = method.get("marker", None)
         linestyle = method.get("linestyle", None)
+        name      = method.get("name", name)
 
         if color is None or marker is None or linestyle is None:
             ac, am, als = auto_style(i)
@@ -114,16 +141,20 @@ def main():
         m_str = ", ".join(f"{m:.3g}" for m in metrics)
         print(f"[{name}] rates(MB): [{r_str}]  {y_label}: [{m_str}]")
 
-    plt.title(exp_name)
-    plt.xlabel(x_label)
-    plt.ylabel(y_label)
-    if x_limits: plt.xlim(x_limits[0], x_limits[1])
-    if y_limits: plt.ylim(y_limits[0], y_limits[1])
+    # plt.title(exp_name)
+    plt.yticks(fontsize=12)
+    plt.xticks(fontsize=12)
+    plt.xlabel(x_label, fontsize=14)
+    plt.ylabel(y_label, fontsize=14)
+
+    # if x_limits: plt.xlim(x_limits[0], x_limits[1])
+    # if y_limits: plt.ylim(y_limits[0], y_limits[1])
+
     plt.grid(True, which="both", linestyle=":", linewidth=0.7, alpha=0.7)
 
     # Legend at top
-    plt.legend(loc="upper center", bbox_to_anchor=(0.5, 1.15),
-               ncol=min(legend_ncol, len(methods)), frameon=False)
+    plt.legend(loc="upper center", bbox_to_anchor=(0.5, 1.30),
+               ncol=min(legend_ncol, len(methods)), frameon=False, fontsize=10)
 
     plt.tight_layout()
     if args.out:
