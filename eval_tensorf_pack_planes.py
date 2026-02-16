@@ -31,6 +31,48 @@ python eval_tensorf_pack_planes.py \
   --app_packing_mode flatten --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
   --emit_png\
   --ckpt log/tensorf_lego_VM/tensorf_lego_VM.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode flat4 --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log/tensorf_lego_VM/tensorf_lego_VM.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode mosaic --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log/tensorf_lego_VM/tensorf_lego_VM.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode flatten --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log3/ours_nerf_lego_jpeg_qp20/tensorste_lego_jpeg20_compression_29999.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode flat4 --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log3/ours_nerf_lego_jpeg_qp20/tensorste_lego_jpeg20_compression_29999.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode mosaic --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log3/ours_nerf_lego_jpeg_qp20/tensorste_lego_jpeg20_compression_29999.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode flat4 --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log3/ours_nerf_drums_jpeg_qp20/tensorste_drums_jpeg20_compression_29999.th
+
+python eval_tensorf_pack_planes.py \
+  --den_packing_mode flatten --den_quant_mode global --den_global_range -25 25 --den_r 4 --den_c 4 \
+  --app_packing_mode flat4 --app_quant_mode global --app_global_range -5 5 --app_r 6 --app_c 8 \
+  --emit_png\
+  --ckpt log3/ours_nerf_chair_jpeg_qp20/tensorste_chair_jpeg20_compression_29999.th
 """
 
 

@@ -194,7 +194,7 @@ def main():
             N_samples=-1,       # let evaluation use its default policy
             white_bg=white_bg,
             ndc_ray=ndc_ray,
-            compute_extra_metrics=False,
+            compute_extra_metrics=True,
             device=device,
         )
 

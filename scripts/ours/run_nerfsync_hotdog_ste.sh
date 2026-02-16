@@ -17,23 +17,41 @@ cd ../..
 #                 --n_iters 20000 --TV_weight_app 0.1 --refresh_k 32 \
 #                 --save_every 10000 --vis_every 10000
 
-python train_ste.py --add_exp_version 1 --config configs/nerf_hotdog/hotdog_codec_ste_jpeg50.txt \
+# python train_ste.py --add_exp_version 1 --config configs/nerf_hotdog/hotdog_codec_ste_jpeg50.txt \
+#                 --ckpt log/tensorf_hotdog_VM/tensorf_hotdog_VM.th\
+#                 --compression --batch_size 65536 \
+#                 --codec_training \
+#                 --lr_decay_target_ratio 1 \
+#                 --wandb_project jpeg_ste \
+#                 --n_iters 20000 --TV_weight_app 0.1 --refresh_k 32 \
+#                 --save_every 10000 --vis_every 10000
+
+
+# python train_ste.py --add_exp_version 1 --config configs/nerf_hotdog/hotdog_codec_ste_jpeg35.txt \
+#                 --ckpt log/tensorf_hotdog_VM/tensorf_hotdog_VM.th\
+#                 --compression --batch_size 65536 \
+#                 --codec_training \
+#                 --lr_decay_target_ratio 1 \
+#                 --wandb_project jpeg_ste \
+#                 --n_iters 20000 --TV_weight_app 0.1 --refresh_k 32 \
+#                 --save_every 10000 --vis_every 10000
+
+
+python train_ste.py --add_exp_version 1 --config configs/nerf_hotdog/hotdog_codec_ste_jpeg20.txt \
                 --ckpt log/tensorf_hotdog_VM/tensorf_hotdog_VM.th\
                 --compression --batch_size 65536 \
                 --codec_training \
                 --lr_decay_target_ratio 1 \
                 --wandb_project jpeg_ste \
-                --n_iters 20000 --TV_weight_app 0.1 --refresh_k 32 \
+                --n_iters 30000 --TV_weight_app 0.1 --refresh_k 32 \
                 --save_every 10000 --vis_every 10000
 
-
-python train_ste.py --add_exp_version 1 --config configs/nerf_hotdog/hotdog_codec_ste_jpeg35.txt \
+python train_ste.py --add_exp_version 1 --config configs/nerf_hotdog/hotdog_codec_ste_jpeg10.txt \
                 --ckpt log/tensorf_hotdog_VM/tensorf_hotdog_VM.th\
                 --compression --batch_size 65536 \
                 --codec_training \
                 --lr_decay_target_ratio 1 \
                 --wandb_project jpeg_ste \
-                --n_iters 20000 --TV_weight_app 0.1 --refresh_k 32 \
+                --n_iters 30000 --TV_weight_app 0.1 --refresh_k 32 \
                 --save_every 10000 --vis_every 10000
-
 

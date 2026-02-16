@@ -19,25 +19,95 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 """
 Usage:
-python eval.py  \
+python eval_nerfcodec.py  \
     --dataset_name blender \
     --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
-    --N_vis 5 \
+    --N_vis 100 \
     --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
     --system_ckpt log_2/nerf_chair/chair_codec_system_34999.th \
     --ckpt log_2/nerf_chair/chair_codec_compression_34999.th 
 
-python eval.py  \
+python eval_nerfcodec.py  \
     --dataset_name blender \
     --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
-    --N_vis 5 \
+    --N_vis 100 \
     --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
     --system_ckpt log_2/nerf_chair_384/chair_codec_384_system_19999.th \
     --ckpt log_2/nerf_chair_384/chair_codec_384_compression_19999.th 
 
+python eval_nerfcodec.py  \
+    --dataset_name blender \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 5 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/ship \
+    --system_ckpt log_2/nerf_mic/mic_codec_system_29999.th \
+    --ckpt log_2/nerf_mic/mic_codec_compression_29999.th
 
+python eval_nerfcodec.py  \
+    --dataset_name blender \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 5 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/ship \
+    --system_ckpt log_2/nerf_ship/ship_codec_system_39999.th \
+    --ckpt log_2/nerf_ship/ship_codec_compression_39999.th
 
-- python eval.py --dataset_name blender --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego --downsample_train 1 --compression --compression_strategy adaptor_feat_coding --compress_before_volrend --system_ckpt log/lego_codec_384/version_002/lego_codec_384_system_64999.th --ckpt log/lego_codec_384/version_002/lego_codec_384_compression_64999.th --N_vis 20
+python eval_nerfcodec.py  \
+    --dataset_name blender \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego \
+    --system_ckpt log_2/nerf_lego/lego_codec_system_64999.th \
+    --ckpt log_2/nerf_lego/lego_codec_compression_64999.th
+
+python eval_nerfcodec.py  \
+    --dataset_name blender \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/drums \
+    --system_ckpt log_2/nerf_drums_384/drums_codec_384_system_29999.th \
+    --ckpt log_2/nerf_drums_384/drums_codec_384_compression_29999.th
+
+python eval_nerfcodec.py  \
+    --dataset_name blender \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/ship \
+    --system_ckpt log_2/nerf_ship/ship_codec_system_39999.th \
+    --ckpt log_2/nerf_ship/ship_codec_compression_39999.th
+
+python eval_nerfcodec.py  \
+    --dataset_name blender \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/mic \
+    --system_ckpt log_2/nerf_mic/mic_codec_system_29999.th \
+    --ckpt log_2/nerf_mic/mic_codec_compression_29999.th
+
+python eval_nerfcodec.py  \
+    --dataset_name tankstemple \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 5 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Barn \
+    --system_ckpt log/barn_codec/version_000/barn_codec_system_39999.th \
+    --ckpt log/barn_codec/version_000/barn_codec_compression_39999.th
+
+python eval_nerfcodec.py  \
+    --dataset_name tankstemple \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 5 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Caterpillar \
+    --system_ckpt log/barn_codec/version_000/barn_codec_system_39999.th \
+    --ckpt log/barn_codec/version_000/barn_codec_compression_39999.th
+
+python eval_nerfcodec.py  \
+    --dataset_name tankstemple \
+    --compression --compression_strategy adaptor_feat_coding --compress_before_volrend \
+    --N_vis 100 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Family\
+    --system_ckpt log_2/tt_family/family_codec_system_34999.th \
+    --ckpt log_2/tt_family/family_codec_compression_34999.th
+
+- python eval_nerfcodec.py --dataset_name blender --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego --downsample_train 1 --compression --compression_strategy adaptor_feat_coding --compress_before_volrend --system_ckpt log/lego_codec_384/version_002/lego_codec_384_system_64999.th --ckpt log/lego_codec_384/version_002/lego_codec_384_compression_64999.th --N_vis 20
 
 """
 

@@ -7,6 +7,59 @@ python eval_ste.py  \
     --config configs/nerf_chair/chair_codec_ste_jpeg35.txt \
     --system_ckpt log_2/nerf_chair_jpeg35/tensorste_chair_jpeg35_compression_19999.th \
     --ckpt log_2/nerf_chair_jpeg35/tensorste_chair_jpeg35_system_19999.th 
+
+python eval_ste.py  \
+    --dataset_name blender \
+    --N_vis 5 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
+    --config configs/nerf_chair/chair_codec_ste_jpeg65.txt \
+    --system_ckpt log_2/nerf_chair_jpeg65/tensorste_chair_jpeg65_compression_19999.th \
+    --ckpt log_2/nerf_chair_jpeg65/tensorste_chair_jpeg65_system_19999.th 
+
+python eval_ste.py  \
+    --dataset_name blender \
+    --N_vis 100 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
+    --config configs/nerf_chair/chair_codec_ste_jpeg80.txt \
+    --system_ckpt log_2/nerf_chair_jpeg80/tensorste_chair_jpeg80_compression_19999.th \
+    --ckpt log_2/nerf_chair_jpeg80/tensorste_chair_jpeg80_system_19999.th \
+    --eval_dir qualitative/nerf_chair_jpeg80
+
+    python eval_ste.py  \
+    --dataset_name blender \
+    --N_vis 100 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
+    --config configs/nerf_chair/chair_codec_ste_jpeg65.txt \
+    --system_ckpt log_2/nerf_chair_jpeg65/tensorste_chair_jpeg65_compression_19999.th \
+    --ckpt log_2/nerf_chair_jpeg65/tensorste_chair_jpeg65_system_19999.th \
+    --eval_dir qualitative/nerf_chair_jpeg65
+
+python eval_ste.py  \
+    --dataset_name blender \
+    --N_vis 100 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
+    --config configs/nerf_chair/chair_codec_ste_jpeg50.txt \
+    --system_ckpt log_2/nerf_chair_jpeg50/tensorste_chair_jpeg50_compression_19999.th \
+    --ckpt log_2/nerf_chair_jpeg50/tensorste_chair_jpeg50_system_19999.th \
+    --eval_dir qualitative/nerf_chair_jpeg50
+
+python eval_ste.py  \
+    --dataset_name blender \
+    --N_vis 100 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
+    --config configs/nerf_chair/chair_codec_ste_jpeg35.txt \
+    --system_ckpt log_2/nerf_chair_jpeg35/tensorste_chair_jpeg35_compression_19999.th \
+    --ckpt log_2/nerf_chair_jpeg35/tensorste_chair_jpeg35_system_19999.th \
+    --eval_dir qualitative/nerf_chair_jpeg35
+
+python eval_ste.py  \
+    --dataset_name blender \
+    --N_vis 100 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
+    --config configs/nerf_chair/chair_codec_ste_jpeg20.txt \
+    --system_ckpt log3/ours_nerf_chair_jpeg_qp20/te_nerf_chair_jpeg_qp20_compression_29999.th \
+    --ckpt log3/ours_nerf_chair_jpeg_qp20/ste_nerf_chair_jpeg_qp20_system_29999.th \
+    --eval_dir qualitative/nerf_chair_jpeg20
 """
 #!/usr/bin/env python3
 import os, json, glob

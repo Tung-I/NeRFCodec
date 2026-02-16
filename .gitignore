@@ -9,3 +9,6 @@ log_2/*
 log3/*
 !log/.gitkeep
 eval_outputs/*
+qualitative*
+qualitative/*
+qualitative_crop_folder/*
