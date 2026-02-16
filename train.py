@@ -469,7 +469,7 @@ def reconstruction(args):
         }
         if loss_reg_val is not None:       log_dict["train/loss_reg"] = loss_reg_val
         if loss_l1_val is not None:        log_dict["train/loss_l1"] = loss_l1_val
-        if loss_appl1_val is not None:     log_dict["train/loss_appl1"] = loss_appl1_val
+        # if loss_appl1_val is not None:     log_dict["train/loss_appl1"] = loss_appl1_val
         if reg_tv_density_val is not None: log_dict["train/reg_tv_density"] = reg_tv_density_val
         if reg_tv_app_val is not None:     log_dict["train/reg_tv_app"] = reg_tv_app_val
         wandb.log(log_dict, step=it)

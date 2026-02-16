@@ -14,10 +14,10 @@
       "marker": "*",
       "color": "red",
       "points": [
-        { "plane_rate_mb": 1.701, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 37.34 },
-        { "plane_rate_mb": 1.325, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 36.97 },
-        { "plane_rate_mb": 1.036, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 36.53 },
-        { "plane_rate_mb": 0.698, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 35.25 }
+        { "plane_rate_mb": 0.785, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 34.70 },
+        { "plane_rate_mb": 0.628, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 34.23 },
+        { "plane_rate_mb": 0.499, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 33.76 },
+        { "plane_rate_mb": 0.329, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 32.35 }
       ]
     },
     {
@@ -26,8 +26,8 @@
       "marker": "x",
       "color": "orange",
       "points": [
-        { "den_codec_rate_mb": 0.809, "app_codec_rate_mb": 1.082, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 36.73 },
-        { "codec_rate_mb": 1.0879, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 35.26 }
+        { "den_codec_rate_mb": 0.809, "app_codec_rate_mb": 1.082, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 34.79 },
+        { "codec_rate_mb": 1.0879, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 33.28 }
       ]
     },
     {
@@ -36,9 +36,9 @@
       "marker": "x",
       "color": "brown",
       "points": [
-        { "model_rate_mb": 2.9, "metric": 36.17 },
-        { "model_rate_mb": 1.5, "metric": 35.40 },
-        { "model_rate_mb": 0.8, "metric": 34.26 }
+        { "model_rate_mb": 2.8, "metric": 33.26 },
+        { "model_rate_mb": 1.4, "metric": 32.64 },
+        { "model_rate_mb": 0.7, "metric": 31.53 }
       ]
     },
     {
@@ -47,9 +47,9 @@
       "marker": "x",
       "color": "green",
       "points": [
-        { "model_rate_mb": 2.6, "metric": 36.22 },
-        { "model_rate_mb": 1.4, "metric": 35.73 },
-        { "model_rate_mb": 0.8, "metric": 35.00 }
+        { "model_rate_mb": 2.5, "metric": 33.05 },
+        { "model_rate_mb": 1.3, "metric": 32.72 },
+        { "model_rate_mb": 0.8, "metric": 32.20 }
       ]
     },
     {
@@ -58,9 +58,9 @@
       "marker": "x",
       "color": "purple",
       "points": [
-        { "model_rate_mb": 2.7, "metric": 35.57 },
-        { "model_rate_mb": 1.6, "metric": 35.33 },
-        { "model_rate_mb": 0.9, "metric": 34.67 }
+        { "model_rate_mb": 2.4, "metric": 32.38 },
+        { "model_rate_mb": 1.5, "metric": 32.23 },
+        { "model_rate_mb": 0.8, "metric": 31.95 }
       ]
     },
     {
@@ -68,7 +68,7 @@
       "linestyle": "None",
       "marker": "o",
       "points": [
-        { "model_rate_mb": 71.8, "metric": 36.70 }
+        { "model_rate_mb": 71.3, "metric": 34.79 }
       ]
     },
     {
@@ -76,7 +76,7 @@
       "linestyle": "None",
       "marker": "o",
       "points": [
-        { "model_rate_mb": 39.5, "metric": 36.04 }
+        { "model_rate_mb": 39.5, "metric": 33.08 }
       ]
     },
     {
@@ -84,7 +84,7 @@
       "linestyle": "None",
       "marker": "o",
       "points": [
-        { "model_rate_mb": 3.90, "metric": 34.48 }
+        { "model_rate_mb": 3.9, "metric": 31.66 }
       ]
     },
     {
@@ -92,7 +92,7 @@
       "linestyle": "None",
       "marker": "o",
       "points": [
-        { "model_rate_mb": 8.5, "metric": 36.14 }
+        { "model_rate_mb": 7.9, "metric": 32.81 }
       ]
     },
     {
@@ -100,7 +100,7 @@
       "linestyle": "None",
       "marker": "o",
       "points": [
-        { "model_rate_mb": 1.3, "metric": 34.72 }
+        { "model_rate_mb": 1.4, "metric": 31.77 }
       ]
     },
     {
@@ -108,7 +108,7 @@
       "linestyle": "None",
       "marker": "o",
       "points": [
-        { "model_rate_mb": 4.2, "metric": 36.04 }
+        { "model_rate_mb": 3.5, "metric": 32.88 }
       ]
     }
   ]

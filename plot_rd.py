@@ -7,7 +7,8 @@ from matplotlib.ticker import LogLocator, LogFormatterMathtext
 
 """
 Usage:
-    python plot_rd.py --json nerf_chair.json --out nerf_chair_rd_curve.png --no-show --log-scale
+    python plot_rd.py --json nerf_results.json --out nerf_rd_curve.png --no-show --log-scale
+    python plot_rd.py --json tanksandtemples_results.json --out tanksandtemples_rd_curve.png --no-show --log-scale
 """
 
 # ------------------------------

@@ -1,0 +1,127 @@
+{
+  "experiment_name": "TanksAndTemples Dataset",
+  "x_label": "Bitrate (MB)",
+  "y_label": "PSNR (dB)",
+  "y_limits": [25, 30],
+  "x_limits": [0, 3],
+  "legend_ncol": 4,
+  "metric_key": "metric",       
+  "show_markers": true,           
+  "methods": [
+    {
+      "name": "CatRF-JPEG",
+      "linestyle": "-",
+      "marker": "*",
+      "color": "red",
+      "points": [
+        { "plane_rate_mb": 0.785, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 29.10 },
+        { "plane_rate_mb": 0.657, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 28.97 },
+        { "plane_rate_mb": 0.507, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 28.48 },
+        { "plane_rate_mb": 0.377, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 28.19 }
+      ]
+    },
+    {
+      "name": "CNC",
+      "linestyle": "-",
+      "marker": "x",
+      "color": "black",
+      "points": [
+        { "model_rate_mb": 1.532, "metric": 28.65 },
+        { "model_rate_mb": 1.090, "metric": 28.29 },
+        { "model_rate_mb": 0.884, "metric": 28.11 },
+        { "model_rate_mb": 0.720, "metric": 28.08 }
+      ]
+    },
+    {
+      "name": "NeRFCodec",
+      "linestyle": "-",
+      "marker": "x",
+      "color": "orange",
+      "points": [
+        { "model_rate_mb": 1.884, "metric": 27.91 },
+        { "model_rate_mb": 1.084, "metric": 27.42 }
+      ]
+    },
+    {
+      "name": "BiRF",
+      "linestyle": "-",
+      "marker": "x",
+      "color": "brown",
+      "points": [
+        { "model_rate_mb": 2.9, "metric": 28.62 },
+        { "model_rate_mb": 1.5, "metric": 28.44 },
+        { "model_rate_mb": 0.8, "metric": 28.02 }
+      ]
+    },
+    {
+      "name": "ECRF",
+      "linestyle": "-",
+      "marker": "x",
+      "color": "green",
+      "points": [
+        { "model_rate_mb": 2.5, "metric": 28.41 },
+        { "model_rate_mb": 1.4, "metric": 28.31 },
+        { "model_rate_mb": 0.8, "metric": 28.14 }
+      ]
+    },
+    {
+      "name": "Masked-Wavelet",
+      "linestyle": "-",
+      "marker": "x",
+      "color": "purple",
+      "points": [
+        { "model_rate_mb": 2.4, "metric": 28.27 },
+        { "model_rate_mb": 1.7, "metric": 28.01 },
+        { "model_rate_mb": 0.9, "metric": 27.77 }
+      ]
+    },
+    {
+      "name": "TensoRF-VM",
+      "linestyle": "None",
+      "marker": "o",
+      "points": [
+        { "model_rate_mb": 74.08, "metric": 29.11 }
+      ]
+    },
+    {
+      "name": "Instant-NGP",
+      "linestyle": "None",
+      "marker": "o",
+      "points": [
+        { "model_rate_mb": 39.5, "metric": 28.85 }
+      ]
+    },
+    {
+      "name": "TensoRF-CP",
+      "linestyle": "None",
+      "marker": "o",
+      "points": [
+        { "model_rate_mb": 4.0, "metric": 27.59 }
+      ]
+    },
+    {
+      "name": "TensoRF High",
+      "linestyle": "None",
+      "marker": "o",
+      "points": [
+        { "model_rate_mb": 6.7, "metric": 28.24 }
+      ]
+    },
+    {
+      "name": "VQ-DVGO",
+      "linestyle": "None",
+      "marker": "o",
+      "points": [
+        { "model_rate_mb": 1.4, "metric": 28.26 }
+      ]
+    },
+    {
+      "name": "VQ-TensoRF",
+      "linestyle": "None",
+      "marker": "o",
+      "points": [
+        { "model_rate_mb": 3.4, "metric": 28.25 }
+      ]
+    }
+  ]
+}

@@ -91,10 +91,149 @@ def Multiple_scene_renderer(batch_data, tensorf, chunk=4096, N_samples=-1, ndc_r
 
     return torch.cat(rgbs), None, torch.cat(depth_maps), None, None
 
+@torch.no_grad()
+def evaluation_ds(
+    test_dataset,
+    tensorf,
+    args,
+    renderer,
+    savePath=None,
+    N_vis=5,
+    prtx='',
+    N_samples=-1,
+    white_bg=False,
+    ndc_ray=False,
+    compute_extra_metrics=True,
+    device='cuda',
+    downsample=1.0,
+):
+    """
+    downsample: spatial downsampling factor for both GT and rendered images.
+                e.g., downsample=2.0 -> evaluate on H/2 x W/2.
+    """
+    PSNRs, rgb_maps, depth_maps = [], [], []
+    ssims, l_alex, l_vgg = [], [], []
+    os.makedirs(savePath, exist_ok=True)
+    os.makedirs(os.path.join(savePath, "rgbd"), exist_ok=True)
+
+    try:
+        tqdm._instances.clear()
+    except Exception:
+        pass
+
+    near_far = test_dataset.near_far
+    img_eval_interval = 1 if N_vis < 0 else max(test_dataset.all_rays.shape[0] // N_vis, 1)
+    idxs = list(range(0, test_dataset.all_rays.shape[0], img_eval_interval))
+
+    # Treat downsample <= 1.0 as no downsampling
+    if downsample <= 1.0:
+        ds_factor = 1
+    else:
+        ds_factor = int(round(downsample))
+
+    for idx, samples in tqdm(
+        enumerate(test_dataset.all_rays[0::img_eval_interval]),
+        file=sys.stdout
+    ):
+        W, H = test_dataset.img_wh
+        D = samples.shape[-1]
+
+        # Original full-res shapes
+        # samples: [H*W, D] per image (assumed)
+        rays_full = samples.view(H, W, D)
+
+        if ds_factor == 1:
+            # No downsampling: original behavior
+            rays = rays_full.view(-1, D)
+            H_eff, W_eff = H, W
+        else:
+            # Make sure we only use a region divisible by ds_factor
+            H_eff = (H // ds_factor) * ds_factor
+            W_eff = (W // ds_factor) * ds_factor
+
+            rays_cropped = rays_full[:H_eff, :W_eff]                 # [H_eff, W_eff, D]
+            rays_ds = rays_cropped[::ds_factor, ::ds_factor, :]      # [H_ds, W_ds, D]
+            rays = rays_ds.reshape(-1, D)
+            H_eff //= ds_factor
+            W_eff //= ds_factor
+
+        # Render on downsampled rays
+        rgb_map, _, depth_map, _, _ = renderer(
+            rays,
+            tensorf,
+            chunk=4096,
+            N_samples=N_samples,
+            ndc_ray=ndc_ray,
+            white_bg=white_bg,
+            device=device,
+        )
+        rgb_map = rgb_map.clamp(0.0, 1.0)
+
+        # Reshape to (H_ds, W_ds)
+        rgb_map = rgb_map.reshape(H_eff, W_eff, 3).cpu()
+        depth_map = depth_map.reshape(H_eff, W_eff).cpu()
+
+        # Depth visualization
+        # depth_map_vis, _ = visualize_depth_numpy(depth_map.numpy(), near_far)
+        depth_map_vis, _ = visualize_depth_numpy(depth_map.numpy(), None)  # as in your modified code
+
+        if len(test_dataset.all_rgbs):
+            # Ground truth at full-res
+            gt_full = test_dataset.all_rgbs[idxs[idx]].view(H, W, 3)
+
+            if ds_factor == 1:
+                gt_rgb = gt_full
+            else:
+                # Match the same cropped + strided pattern as rays
+                gt_cropped = gt_full[: (H_eff * ds_factor), : (W_eff * ds_factor)]
+                gt_rgb = gt_cropped[::ds_factor, ::ds_factor]
+
+            # Metric computation in [0,1]
+            loss = torch.mean((rgb_map - gt_rgb) ** 2)
+            PSNRs.append(-10.0 * np.log(loss.item()) / np.log(10.0))
+
+            if compute_extra_metrics:
+                ssim = rgb_ssim(rgb_map, gt_rgb, 1)
+                l_a = rgb_lpips(gt_rgb.numpy(), rgb_map.numpy(), 'alex', tensorf.device)
+                l_v = rgb_lpips(gt_rgb.numpy(), rgb_map.numpy(), 'vgg', tensorf.device)
+                ssims.append(ssim)
+                l_alex.append(l_a)
+                l_vgg.append(l_v)
+
+        # Convert to uint8 for saving
+        rgb_u8 = (rgb_map.numpy() * 255).astype('uint8')
+        gt_u8 = (gt_rgb.numpy() * 255).astype('uint8') if len(test_dataset.all_rgbs) else rgb_u8
+
+        rgb_maps.append(rgb_u8)
+        depth_maps.append(depth_map_vis)
+
+        if savePath is not None:
+            imageio.imwrite(f'{savePath}/{prtx}{idx:03d}.png', rgb_u8)
+            imageio.imwrite(f'{savePath}/{prtx}{idx:03d}_gt.png', gt_u8)
+            rgbd = np.concatenate((rgb_u8, depth_map_vis), axis=1)
+            imageio.imwrite(f'{savePath}/rgbd/{prtx}{idx:03d}.png', rgbd)
+
+    # Videos (on downsampled resolution)
+    imageio.mimwrite(f'{savePath}/{prtx}video.mp4', np.stack(rgb_maps), fps=30, quality=10)
+    imageio.mimwrite(f'{savePath}/{prtx}depthvideo.mp4', np.stack(depth_maps), fps=30, quality=10)
+
+    if PSNRs:
+        psnr = np.mean(np.asarray(PSNRs))
+        if compute_extra_metrics:
+            ssim = np.mean(np.asarray(ssims))
+            l_a = np.mean(np.asarray(l_alex))
+            l_v = np.mean(np.asarray(l_vgg))
+            np.savetxt(f'{savePath}/{prtx}mean.txt', np.asarray([psnr, ssim, l_a, l_v]))
+        else:
+            np.savetxt(f'{savePath}/{prtx}mean.txt', np.asarray([psnr]))
+
+    return PSNRs
+
+
 
 @torch.no_grad()
 def evaluation(test_dataset,tensorf, args, renderer, savePath=None, N_vis=5, prtx='', N_samples=-1,
-               white_bg=False, ndc_ray=False, compute_extra_metrics=True, device='cuda'):
+               white_bg=False, ndc_ray=False, compute_extra_metrics=True, device='cuda', eval_limit=26):
     PSNRs, rgb_maps, depth_maps = [], [], []
     ssims,l_alex,l_vgg=[],[],[]
     os.makedirs(savePath, exist_ok=True)
@@ -142,6 +281,9 @@ def evaluation(test_dataset,tensorf, args, renderer, savePath=None, N_vis=5, prt
         rgb_maps.append(rgb_map)
         depth_maps.append(depth_map)
         if savePath is not None:
+            if idx >= eval_limit:
+                break
+            print(f"imwriteing {savePath}/{prtx}{idx:03d}.png")
             imageio.imwrite(f'{savePath}/{prtx}{idx:03d}.png', rgb_map)
             imageio.imwrite(f'{savePath}/{prtx}{idx:03d}_gt.png', gt_rgb)
             rgb_map = np.concatenate((rgb_map, depth_map), axis=1)

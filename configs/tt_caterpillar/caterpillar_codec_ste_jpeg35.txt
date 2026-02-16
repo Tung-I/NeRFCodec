@@ -1,6 +1,6 @@
 dataset_name = tankstemple
-datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Family
-expname =  ste_family_jpeg65
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Caterpillar
+expname =  ste_caterpillar_jpeg35
 basedir = ./log
 
 # === training ===
@@ -34,17 +34,18 @@ den_packing_mode = flatten
 den_quant_mode   = global
 den_global_min   = -25.0
 den_global_max   =  25.0
-den_quality      = 65        # used if codec_backend=jpeg
+den_quality      = 35        # used if codec_backend=jpeg
 den_png_level    = -1         # used if codec_backend=png
 den_r = 4
-den_c = 8
+den_c = 4
+
 
 # appearance stream
 app_packing_mode = flatten
 app_quant_mode   = global
 app_global_min   = -5.0
 app_global_max   =  5.0
-app_quality      = 65
+app_quality      = 35
 app_png_level    = -1
-app_r = 8
-app_c = 12
+app_r = 6
+app_c = 8

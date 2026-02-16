@@ -853,6 +853,11 @@ if __name__ == "__main__":
     set_seed(20211202)
 
     args = config_parser()
+
+    # print("dataset_name:", args.dataset_name)
+    # print("n_lamb_sigma:", args.n_lamb_sigma)
+    # print("n_lamb_sh   :", args.n_lamb_sh)
+    # raise Exception
     
     if args.export_mesh:
         export_mesh(args)

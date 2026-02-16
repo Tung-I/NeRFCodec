@@ -1,7 +1,6 @@
-
-dataset_name = blender
-datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/mic
-expname =  tensorste_mic_jpeg80
+dataset_name = tankstemple
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/TanksAndTemples/Ignatius
+expname =  ste_ignatius_jpeg80
 basedir = ./log
 
 # === training ===

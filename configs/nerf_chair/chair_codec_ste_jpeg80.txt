@@ -1,6 +1,6 @@
 dataset_name = blender
 datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair
-expname =  tensorste_chair_jpeg80
+expname =  ste_chair_jpeg80
 basedir = ./log
 
 # === training ===
@@ -19,15 +19,9 @@ view_pe = 2
 fea_pe = 2
 L1_weight_inital = 1e-5
 L1_weight_rest = 1e-5
-L1_weight_app = 1e-5
 rm_weight_mask_thre = 1e-4
 N_vis = 5
 render_test = 1
-align = 32
-
-# === Total Variation Loss ===
-TV_weight_density=1e-5
-TV_weight_app=1e-5
 
 # === STE plane codec backend ===
 model_name = TensorSTE
@@ -54,4 +48,3 @@ app_quality      = 80
 app_png_level    = -1
 app_r = 6
 app_c = 8
-

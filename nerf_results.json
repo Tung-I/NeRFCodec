@@ -9,15 +9,27 @@
   "show_markers": true,           
   "methods": [
     {
-      "name": "CatRF-JPEG",
+      "name": "CATRF-JPEG",
       "linestyle": "-",
       "marker": "*",
       "color": "red",
       "points": [
-        { "plane_rate_mb": 0.785, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 34.70 },
-        { "plane_rate_mb": 0.628, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 34.23 },
-        { "plane_rate_mb": 0.499, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 33.76 },
-        { "plane_rate_mb": 0.329, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 32.35 }
+        { "plane_rate_mb": 0.764, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 32.90 },
+        { "plane_rate_mb": 0.626, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 32.68 },
+        { "plane_rate_mb": 0.479, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 32.49 },
+        { "plane_rate_mb": 0.357, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 32.17 }
+      ]
+    },
+    {
+      "name": "CNC",
+      "linestyle": "-",
+      "marker": "x",
+      "color": "black",
+      "points": [
+        { "model_rate_mb": 0.991, "metric": 33.16 },
+        { "model_rate_mb": 0.908, "metric": 32.68 },
+        { "model_rate_mb": 0.715, "metric": 32.49 },
+        { "model_rate_mb": 0.613, "metric": 31.70 }
       ]
     },
     {
@@ -26,8 +38,8 @@
       "marker": "x",
       "color": "orange",
       "points": [
-        { "den_codec_rate_mb": 0.809, "app_codec_rate_mb": 1.082, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 34.79 },
-        { "codec_rate_mb": 1.0879, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 33.28 }
+        { "model_rate_mb": 1.842, "metric": 32.19 },
+        { "codec_rate_mb": 1.0879, "feat_vec_rate_mb": 0.049, "renderer_rate_mb": 0.042, "metric": 31.68 }
       ]
     },
     {
@@ -68,7 +80,7 @@
       "linestyle": "None",
       "marker": "o",
       "points": [
-        { "model_rate_mb": 71.3, "metric": 34.79 }
+        { "model_rate_mb": 67.5, "metric": 33.05 }
       ]
     },
     {
