@@ -206,7 +206,18 @@ NERF_SYNTHETIC_CFG = {
             "points": [
                 { "model_rate_mb": 800, "metric": 31.8 }
             ]
-        }
+        },
+        {
+            "name": "HAC++",
+            "linestyle": "-",
+            "marker": "o",
+            "color": "violet",
+            "points": [
+                { "model_rate_mb": 1.357, "metric": 33.27 },
+                { "model_rate_mb": 1.075, "metric": 32.99 },
+                { "model_rate_mb": 0.883, "metric": 32.71 }
+            ]
+        },
     ]
 }
 

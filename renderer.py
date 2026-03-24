@@ -239,6 +239,7 @@ def evaluation(test_dataset,tensorf, args, renderer, savePath=None, N_vis=5, prt
     os.makedirs(savePath, exist_ok=True)
     os.makedirs(savePath+"/rgbd", exist_ok=True)
 
+
     try:
         tqdm._instances.clear()
     except Exception:
@@ -298,12 +299,11 @@ def evaluation(test_dataset,tensorf, args, renderer, savePath=None, N_vis=5, prt
             ssim = np.mean(np.asarray(ssims))
             l_a = np.mean(np.asarray(l_alex))
             l_v = np.mean(np.asarray(l_vgg))
-            np.savetxt(f'{savePath}/{prtx}mean.txt', np.asarray([psnr, ssim, l_a, l_v]))
+            return np.asarray([psnr, ssim, l_a, l_v])
+            # np.savetxt(f'{savePath}/{prtx}mean.txt', np.asarray([psnr, ssim, l_a, l_v]))
         else:
-            np.savetxt(f'{savePath}/{prtx}mean.txt', np.asarray([psnr]))
-
-
-    return PSNRs
+            # np.savetxt(f'{savePath}/{prtx}mean.txt', np.asarray([psnr]))
+            return np.asarray([psnr])
 
 @torch.no_grad()
 def evaluation_path(test_dataset,tensorf, c2ws, renderer, savePath=None, N_vis=5, prtx='', N_samples=-1,

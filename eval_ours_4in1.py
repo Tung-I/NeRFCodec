@@ -434,7 +434,7 @@ def main():
     n_vis = args.N_vis if getattr(args, "N_vis", 0) and args.N_vis > 0 else -1
 
     with torch.no_grad():
-        PSNRs = evaluation(
+         metrics = evaluation(
             test_dataset,
             tensorf,
             args,
@@ -464,12 +464,17 @@ def main():
         #     downsample=1.0
         # )
 
-    avg_psnr = float(np.mean(PSNRs)) if len(PSNRs) else float("nan")
-    with open(os.path.join(eval_dir, "average_psnr.txt"), "w") as f:
-        f.write(f"{avg_psnr:.6f}\n")
+    # avg_psnr = float(np.mean(PSNRs)) if len(PSNRs) else float("nan")
+    # with open(os.path.join(eval_dir, "eval_results.txt"), "w") as f:
+        # f.write(f"{avg_psnr:.6f}\n")
+    np.savetxt(f'{eval_dir}/eval_results.txt', metrics, delimiter=',', header="psnr, ssim, l_alex, l_vgg")
 
-    print(f"[4in1] average PSNR over {len(PSNRs)} views: {avg_psnr:.4f} dB")
-    print(f"[4in1] DONE. Outputs in: {eval_dir}")
+
+
+    # print(f"[4in1] average PSNR over {len(PSNRs)} views: {avg_psnr:.4f} dB")
+    print(f"[4in1] metrics saved to: {eval_dir}/eval_results.txt")
+    print(metrics)
+    # print(f"[4in1] DONE. Outputs in: {eval_dir}")
 
 
 if __name__ == "__main__":

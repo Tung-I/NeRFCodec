@@ -13,6 +13,8 @@ upsamp_list = [2000,3000,4000,5500,7000]
 update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
 #upsamp_list = [30001]
 #update_AlphaMask_list = [30001]
+n_lamb_sigma = [16,16,16]
+n_lamb_sh = [48,48,48]
 
 shadingMode = MLP_Fea
 fea2denseAct = softplus

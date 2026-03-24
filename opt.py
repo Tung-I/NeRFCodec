@@ -34,6 +34,13 @@ def config_parser(cmd=None):
     group.add_argument("--ste_enabled", type=int, default=1, help="Toggle STE on/off.")
     group.add_argument("--refresh_k", type=int, default=1, help="Codec refresh frequency.")
     group.add_argument("--refresh_eps", type=float, default=0.01, help="Codec refresh threshold (if applicable).")
+    group.add_argument("--grad_surrogate_mode", type=str, default="ste",
+                   choices=["ste", "mste_std", "spsa"])
+    group.add_argument("--grad_surrogate_std_eps", type=float, default=1e-8)
+    group.add_argument("--spsa_n_samples", type=int, default=1)
+    group.add_argument("--spsa_gate_on_cache_refresh", type=int, default=1)
+    group.add_argument("--grad_log_every", type=int, default=10)
+    group.add_argument("--grad_sample_k", type=int, default=200000)
 
 
     # Pixel format for video codecs (hevc/av1/vp9). yuv420p is compatible & fastest.

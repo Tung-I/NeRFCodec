@@ -175,3 +175,45 @@ python eval_ours_4in1.py \
 #     --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/mic \
 #     --config configs/nerf_mic/mic_codec_ste_jpeg80.txt \
 #     --ckpt_dir log3/ours_nerf_mic_jpeg_qp80
+
+python eval_ours_4in1.py \
+    --dataset_name blender \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego \
+    --config configs/nerf_lego/lego_codec_ste_jpeg65.txt \
+    --ckpt_dir log/ste_lego_jpeg65/version_001
+
+python eval_ours_4in1.py \
+    --dataset_name blender \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego \
+    --config configs/nerf_lego/lego_codec_ste_jpeg20.txt \
+    --ckpt_dir log/ste_lego_jpeg20/version_000
+
+python eval_ours_4in1.py \
+    --dataset_name blender \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego \
+    --config configs/nerf_lego/lego_codec_ste_jpeg65.txt \
+    --ckpt_dir log/spsa1_lego_jpeg65/version_000
+
+python eval_ours_4in1.py \
+    --dataset_name blender \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego \
+    --config configs/nerf_lego/lego_codec_ste_jpeg20.txt \
+    --ckpt_dir log/spsa1_lego_jpeg20/version_000
+
+python eval_ours_4in1.py \
+    --dataset_name blender \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego \
+    --config configs/nerf_lego/lego_codec_ste_jpeg65.txt \
+    --ckpt_dir log/mste_lego_jpeg65/version_001
+
+python eval_ours_4in1.py \
+    --dataset_name blender \
+    --N_vis 8 \
+    --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego \
+    --config configs/nerf_lego/lego_codec_ste_jpeg20.txt \
+    --ckpt_dir log/mste_lego_jpeg20/version_000

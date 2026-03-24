@@ -22,7 +22,7 @@ renderer = OctreeRender_trilinear_fast  # keep identical to training
 Usage:
 python eval_tensorf.py \
     --dataset_name blender \
-    --N_vis 5 \
+    --N_vis 8 \
     --datadir /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair \
     --config configs/nerf_chair/chair.txt \
     --ckpt_dir log/tensorf_chair_VM

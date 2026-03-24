@@ -29,6 +29,148 @@ from models.tensorSTE import TensorSTE, PlanesCfg
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 renderer = OctreeRender_trilinear_fast   # keep identical for compatibility
 
+# ======================================================================================
+# Logging gradients
+# ======================================================================================
+def _safe_float(x):
+    try:
+        return float(x)
+    except Exception:
+        return float("nan")
+
+
+@torch.no_grad()
+def _compute_param_norm_and_grad_stats(
+    model,
+    sample_k: int = 200000,
+):
+    """
+    Returns:
+      dict with global stats and plane-specific norms.
+    Notes:
+      - Uses sampling for p95/p99 to keep overhead small.
+      - Computes norms in float64 for stability.
+    """
+    total_param_sq = 0.0
+    total_grad_sq = 0.0
+
+    # global grad abs stats
+    grad_abs_sum = 0.0
+    grad_abs_count = 0
+
+    grad_max_abs = 0.0
+    grad_nan_inf = 0
+
+    # sample buffer for quantiles
+    sample_buf = []
+
+    # plane-specific grad norms
+    den_grad_sq = 0.0
+    app_grad_sq = 0.0
+
+    for name, p in model.named_parameters():
+        if p is None:
+            continue
+
+        # param norm
+        if p.requires_grad:
+            total_param_sq += _safe_float((p.detach().float().pow(2).sum()).item())
+
+        g = p.grad
+        if g is None:
+            continue
+
+        g_det = g.detach()
+        if not torch.isfinite(g_det).all():
+            grad_nan_inf += int((~torch.isfinite(g_det)).sum().item())
+
+        g_f = g_det.float()
+
+        # global L2
+        total_grad_sq += _safe_float((g_f.pow(2).sum()).item())
+
+        # abs stats
+        abs_g = g_f.abs()
+        grad_max_abs = max(grad_max_abs, _safe_float(abs_g.max().item()))
+        grad_abs_sum += _safe_float(abs_g.sum().item())
+        grad_abs_count += abs_g.numel()
+
+        # sample for quantiles
+        # (random subset of abs grads; avoids huge flatten)
+        if sample_k > 0:
+            n = abs_g.numel()
+            if n <= sample_k and len(sample_buf) < sample_k:
+                sample_buf.append(abs_g.reshape(-1).cpu())
+            else:
+                # sample a small chunk from this tensor
+                # choose m such that total stays around sample_k
+                remaining = max(0, sample_k - sum(t.numel() for t in sample_buf))
+                if remaining > 0:
+                    m = min(remaining, max(1024, sample_k // 20))
+                    flat = abs_g.reshape(-1)
+                    idx = torch.randint(0, flat.numel(), (m,), device=flat.device)
+                    sample_buf.append(flat[idx].cpu())
+
+        # plane-specific grad norms
+        if "density_plane" in name:
+            den_grad_sq += _safe_float((g_f.pow(2).sum()).item())
+        if "app_plane" in name:
+            app_grad_sq += _safe_float((g_f.pow(2).sum()).item())
+
+    grad_norm = math.sqrt(max(total_grad_sq, 0.0))
+    param_norm = math.sqrt(max(total_param_sq, 0.0))
+    grad_mean_abs = (grad_abs_sum / max(1, grad_abs_count))
+
+    # quantiles (p95/p99) from sampled abs grads
+    p95 = float("nan")
+    p99 = float("nan")
+    if len(sample_buf) > 0:
+        samples = torch.cat(sample_buf, dim=0)
+        # guard: sometimes empty if sample_k==0
+        if samples.numel() > 0:
+            p95 = _safe_float(torch.quantile(samples, 0.95).item())
+            p99 = _safe_float(torch.quantile(samples, 0.99).item())
+
+    out = {
+        "param_norm_l2": param_norm,
+        "grad_norm_l2": grad_norm,
+        "grad_max_abs": grad_max_abs,
+        "grad_mean_abs": grad_mean_abs,
+        "grad_p95_abs": p95,
+        "grad_p99_abs": p99,
+        "grad_nan_inf_count": grad_nan_inf,
+        "grad_over_param": (grad_norm / (param_norm + 1e-12)),
+        "den_grad_norm_l2": math.sqrt(max(den_grad_sq, 0.0)),
+        "app_grad_norm_l2": math.sqrt(max(app_grad_sq, 0.0)),
+    }
+    return out
+
+
+def _init_grad_log(logdir: str):
+    path = os.path.join(logdir, "grad_stats.txt")
+    if not os.path.exists(path):
+        with open(path, "w") as f:
+            f.write(
+                "it\tloss\tmse\tpsnr\t"
+                "grad_l2\tparam_l2\tgrad_over_param\t"
+                "grad_max\tgrad_mean\tgrad_p95\tgrad_p99\t"
+                "den_grad_l2\tapp_grad_l2\t"
+                "nan_inf\n"
+            )
+    return path
+
+
+def _append_grad_log(path: str, it: int, loss, mse, psnr, stats: dict):
+    with open(path, "a") as f:
+        f.write(
+            f"{it}\t"
+            f"{_safe_float(loss)}\t{_safe_float(mse)}\t{_safe_float(psnr)}\t"
+            f"{stats['grad_norm_l2']:.6e}\t{stats['param_norm_l2']:.6e}\t{stats['grad_over_param']:.6e}\t"
+            f"{stats['grad_max_abs']:.6e}\t{stats['grad_mean_abs']:.6e}\t{stats['grad_p95_abs']:.6e}\t{stats['grad_p99_abs']:.6e}\t"
+            f"{stats['den_grad_norm_l2']:.6e}\t{stats['app_grad_norm_l2']:.6e}\t"
+            f"{int(stats['grad_nan_inf_count'])}\n"
+        )
+
 
 # ======================================================================================
 # Utilities
@@ -240,6 +382,11 @@ def reconstruction(args):
         mode=("disabled" if getattr(args, "wandb_off", 0) else "online"),
     )
 
+    # ---- gradient logging ----
+    grad_log_every = int(getattr(args, "grad_log_every", 10))     # default: every 10 iters
+    grad_sample_k  = int(getattr(args, "grad_sample_k", 200000))  # default: sample size for quantiles
+    grad_log_path  = _init_grad_log(logdir)
+
     # -------------------- dataset --------------------
     dataset = dataset_dict[args.dataset_name]
     train_dataset = dataset(args.datadir, split="train", downsample=args.downsample_train, is_stack=False)
@@ -371,12 +518,40 @@ def reconstruction(args):
             loss += 1e-2 * feat_rec
             wandb.log({"train/feat_rec_loss": float(feat_rec)}, step=it)
 
+
         optimizer.zero_grad()
         loss.backward()
+
+        psnr = -10.0 * np.log(mse.detach().item()) / np.log(10.0)
+
+        # ---- gradient stats (log BEFORE optimizer.step) ----
+        if (it % grad_log_every) == 0:
+            gstats = _compute_param_norm_and_grad_stats(tensorf, sample_k=grad_sample_k)
+            _append_grad_log(
+                grad_log_path,
+                it=it,
+                loss=loss.detach().item(),
+                mse=mse.detach().item(),
+                psnr=psnr,  # you compute psnr just after step currently; move psnr calc earlier or compute here
+                stats=gstats,
+            )
+            # optional: also send to wandb for convenience
+            wandb.log({
+                "grad/grad_norm_l2": gstats["grad_norm_l2"],
+                "grad/param_norm_l2": gstats["param_norm_l2"],
+                "grad/grad_over_param": gstats["grad_over_param"],
+                "grad/grad_max_abs": gstats["grad_max_abs"],
+                "grad/grad_mean_abs": gstats["grad_mean_abs"],
+                "grad/grad_p95_abs": gstats["grad_p95_abs"],
+                "grad/grad_p99_abs": gstats["grad_p99_abs"],
+                "grad/den_grad_norm_l2": gstats["den_grad_norm_l2"],
+                "grad/app_grad_norm_l2": gstats["app_grad_norm_l2"],
+                "grad/nan_inf_count": gstats["grad_nan_inf_count"],
+            }, step=it)
+
         optimizer.step()
 
         # metrics & lr decay logging
-        psnr = -10.0 * np.log(mse.detach().item()) / np.log(10.0)
         PSNRs.append(psnr)
         log = {"train/PSNR": float(psnr), "train/mse": float(mse.detach().item())}
         log.update(log_bits)

@@ -1,7 +1,6 @@
-
 dataset_name = blender
-datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/lego
-expname =  tensorste_lego_jpeg35
+datadir = /work/pi_rsitaram_umass_edu/tungi/datasets/nerf_synthetic/chair
+expname =  mste_chair_jpeg65
 basedir = ./log
 
 # === training ===
@@ -13,15 +12,13 @@ upsamp_list = [2000,3000,4000,5500,7000]
 update_AlphaMask_list = [2000, 4000, 6000, 11000, 16000, 21000, 26000]
 #upsamp_list = [30001]
 #update_AlphaMask_list = [30001]
-n_lamb_sigma = [16,16,16]
-n_lamb_sh = [48,48,48]
 
 shadingMode = MLP_Fea
 fea2denseAct = softplus
 view_pe = 2
 fea_pe = 2
-L1_weight_inital = 0
-L1_weight_rest = 0
+L1_weight_inital = 1e-5
+L1_weight_rest = 1e-5
 rm_weight_mask_thre = 1e-4
 N_vis = 5
 render_test = 1
@@ -31,13 +28,15 @@ model_name = TensorSTE
 codec_backend = jpeg           # or png
 compression = 1
 compress_before_volrend = 1
+grad_surrogate_mode = mste_std
+grad_surrogate_std_eps = 1e-8
 
 # density stream
 den_packing_mode = flatten
 den_quant_mode   = global
 den_global_min   = -25.0
 den_global_max   =  25.0
-den_quality      = 35        # used if codec_backend=jpeg
+den_quality      = 65        # used if codec_backend=jpeg
 den_png_level    = -1         # used if codec_backend=png
 den_r = 4
 den_c = 4
@@ -47,7 +46,8 @@ app_packing_mode = flatten
 app_quant_mode   = global
 app_global_min   = -5.0
 app_global_max   =  5.0
-app_quality      = 35
+app_quality      = 65
 app_png_level    = -1
 app_r = 6
 app_c = 8
+
